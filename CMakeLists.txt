@@ -41,7 +41,7 @@ target_link_libraries(SC4MCP PRIVATE ws2_32 version)
 target_compile_definitions(SC4MCP PRIVATE WIN32 _WINDOWS _USRDLL NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 target_compile_options(SC4MCP PRIVATE /permissive- /utf-8)
 # All warnings for SC4MCP's own code; none for the gzcom-dll submodule, which is not changed here.
-set_source_files_properties(${SC4MCP_SOURCES} PROPERTIES COMPILE_OPTIONS /W4)
-set_source_files_properties(${GZCOM_SOURCES} PROPERTIES COMPILE_OPTIONS /W0)
+set_source_files_properties(${SC4MCP_SOURCES} PROPERTIES COMPILE_OPTIONS $<$<CXX_COMPILER_ID:MSVC>:/W4>)
+set_source_files_properties(${GZCOM_SOURCES} PROPERTIES COMPILE_OPTIONS $<$<CXX_COMPILER_ID:MSVC>:/W0>)
 # Static runtime: players do not need to install the Visual C++ redistributable.
 set_property(TARGET SC4MCP PROPERTY MSVC_RUNTIME_LIBRARY "MultiThreaded")

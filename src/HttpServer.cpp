@@ -1,7 +1,9 @@
 // SC4MCP - minimal HTTP/1.1 server (Winsock2), bound to 127.0.0.1 only.
 //
-// One request per connection ("Connection: close"), handled on a single background thread. This is enough for an
-// MCP client on the same machine and keeps the game thread untouched: tools reach the game through MainThreadQueue.
+// One request per connection ("Connection: close"); each connection runs on its own thread (at most 16 at a time),
+// so a client can answer an elicitation while the tool call that asked for it waits. The game thread stays untouched:
+// tools reach the game through MainThreadQueue. Requests whose Host header is not a loopback name are refused (DNS
+// rebinding: a page whose name resolves to 127.0.0.1 would otherwise read same-origin responses such as /setup).
 // A handler may answer with server-sent events (progress notifications of long tools) through HttpServer::Stream.
 #include "HttpServer.h"
 #include "McpLog.h"
@@ -12,6 +14,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <chrono>
 #include <thread>
 
 namespace
@@ -22,6 +25,9 @@ namespace
 	SOCKET listener = INVALID_SOCKET;
 	std::thread worker;
 	std::atomic<bool> running{ false };
+	std::atomic<int> activeConnections{ 0 };
+	constexpr int kMaxConnections = 16;
+	uint16_t listenPort = 0;
 	HttpServer::Handler handler;
 
 	std::string Lower(std::string text)
@@ -62,6 +68,18 @@ namespace
 		return false;
 	}
 
+	bool HostAllowed(const std::string& host)
+	{
+		if (host.empty()) return true;
+		const std::string h = Lower(host);
+		const std::string port = ":" + std::to_string(listenPort);
+		for (const char* name : { "127.0.0.1", "localhost", "[::1]" })
+		{
+			if (h == name || h == std::string(name) + port) return true;
+		}
+		return false;
+	}
+
 	const char* Reason(int status)
 	{
 		switch (status)
@@ -76,6 +94,7 @@ namespace
 		case 405: return "Method Not Allowed";
 		case 413: return "Payload Too Large";
 		case 500: return "Internal Server Error";
+		case 503: return "Service Unavailable";
 		default: return "Status";
 		}
 	}
@@ -120,7 +139,7 @@ namespace
 			return true;
 		}
 
-		bool Started() const { return started; }
+		bool Started() const override { return started; }
 
 	private:
 		SOCKET client;
@@ -158,6 +177,11 @@ namespace
 		std::string path = requestLine.substr(sp1 + 1, sp2 - sp1 - 1);
 		if (const size_t q = path.find('?'); q != std::string::npos) path.resize(q);
 
+		if (!HostAllowed(HeaderValue(headers, "Host")))
+		{
+			Reply(client, { 403, "text/plain", "Host not allowed" });
+			return;
+		}
 		if (!OriginAllowed(HeaderValue(headers, "Origin")))
 		{
 			Reply(client, { 403, "text/plain", "Origin not allowed" });
@@ -213,9 +237,21 @@ namespace
 				if (!running) break;
 				continue;
 			}
-			Handle(client);
-			shutdown(client, SD_BOTH);
-			closesocket(client);
+			if (activeConnections.load() >= kMaxConnections)
+			{
+				Reply(client, { 503, "text/plain", "Too many connections" });
+				shutdown(client, SD_BOTH);
+				closesocket(client);
+				continue;
+			}
+			++activeConnections;
+			std::thread([client]
+			{
+				Handle(client);
+				shutdown(client, SD_BOTH);
+				closesocket(client);
+				--activeConnections;
+			}).detach();
 		}
 	}
 }
@@ -251,6 +287,7 @@ bool HttpServer::Start(uint16_t port, Handler requestHandler)
 		return false;
 	}
 	handler = std::move(requestHandler);
+	listenPort = port;
 	running = true;
 	worker = std::thread(AcceptLoop);
 	McpLog::Write("MCP server listening on http://127.0.0.1:%u/mcp", port);
@@ -263,6 +300,7 @@ void HttpServer::Stop()
 	closesocket(listener);
 	listener = INVALID_SOCKET;
 	if (worker.joinable()) worker.join();
+	for (int i = 0; i < 100 && activeConnections.load() > 0; ++i) std::this_thread::sleep_for(std::chrono::milliseconds(50));
 	WSACleanup();
 	McpLog::Write("MCP server stopped.");
 }

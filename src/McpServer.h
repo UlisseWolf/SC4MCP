@@ -2,12 +2,13 @@
 #pragma once
 #include "HttpServer.h"
 
+#include <cstdint>
 #include <string>
 
 namespace McpServer
 {
-	// Bearer token required on /mcp; empty = no authentication.
-	void Configure(const std::string& authToken);
+	// Bearer token required on /mcp (empty = no authentication), and the port shown on the /setup page.
+	void Configure(const std::string& authToken, uint16_t port);
 
 	HttpServer::Response HandleHttp(const HttpServer::Request& request, HttpServer::Stream& stream);
 }

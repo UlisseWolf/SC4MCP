@@ -69,6 +69,7 @@
     <ClCompile Include="src\Tools.cpp" />
     <ClCompile Include="src\ToolsCommon.cpp" />
     <ClCompile Include="src\ToolsControl.cpp" />
+    <ClCompile Include="src\ToolsDiagnose.cpp" />
     <ClCompile Include="src\ToolsRead.cpp" />
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZBaseString.cpp">
       <WarningLevel>Level3</WarningLevel>

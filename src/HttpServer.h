@@ -30,9 +30,11 @@ namespace HttpServer
 		virtual ~Stream() = default;
 		virtual bool Begin() = 0;
 		virtual bool Event(const std::string& data) = 0;
+		virtual bool Started() const = 0;
 	};
 
-	// handler(request, stream) runs on the accept thread, one request at a time.
+	// handler(request, stream) runs on a connection thread; up to 16 connections are served at the same time, so a
+	// client can answer a request of the server (elicitation) while a tool call waits for it.
 	using Handler = std::function<Response(const Request& request, Stream& stream)>;
 
 	bool Start(uint16_t port, Handler handler);

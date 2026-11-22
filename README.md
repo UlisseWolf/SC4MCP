@@ -76,6 +76,17 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `get_game_data` | `contains` (word or list), `limit` | The raw advisor data (`game` Lua table: coverage, grades, capacities, rates...). |
 | `read_log` | `file` (default `SC4SIM.log`), `lines` (1-1000) | The last lines of a `.log` file next to the DLL. |
 
+### Diagnose and compare
+
+| Tool | Parameters | Description |
+|---|---|---|
+| `diagnose_growth` | - | Why the city does or does not grow: demand per type, undeveloped zones, abandoned lots by the reason the game recorded (low desirability, no power, no water, commute time, low demand), unpowered lots, lots without road access, development failures, power margin, taxes above the neutral rate; with plain findings. |
+| `diagnose_cell` | `x`, `z` | Why one cell does not grow or was abandoned, with plain reasons. |
+| `get_building_properties` | `x` + `z`, or `exemplar`, or `type` + `group` + `instance` | The properties of a building as the game loaded them, after every plugin override: its in-city values and its exemplar. |
+| `snapshot_save` | `name` (default `default`) | Keeps a copy of status, budget, demand, taxes, services and utilities in memory. |
+| `snapshot_compare` | `name`, `min_percent`, `limit` | Only the values that changed since the snapshot (before, after, change, percent), largest first. |
+| `snapshot_list`, `snapshot_delete` | `name` | Manage the snapshots (at most 10, lost when the game closes). |
+
 ### Control the simulation and the city
 
 | Tool | Parameters | Description | Requires |
@@ -89,6 +100,11 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `set_ordinance` | `ordinance` (ID or part of the name), `on` (bool) | Turns an ordinance on or off. | `AllowControl=1` |
 | `place_zone` | `zone`, `x1`, `z1`, `x2`, `z2`, `allow_demolition` (bool) | Zones or dezones (`zone=none`) a rectangle of up to 64 x 64 cells. Developed lots are refused unless `allow_demolition=true` (changing their zone demolishes them); plopped buildings are never touched. | `AllowBuild=1` |
 | `run_cheat` | `cheat` | Runs a cheat code as if typed in the Ctrl+X box. | `AllowCheats=1` |
+
+The tools that change the city (`set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `place_zone`,
+`run_cheat`) accept `dry_run=true` (only describe the change) and, with `ConfirmChanges=1` (default), ask before
+applying: a client that supports MCP elicitation shows the user a confirmation; with other clients the tool returns a
+preview with `confirmation_required` and applies the change only when called again with `confirm=true`.
 
 Cells are `(x, z)` city cells, as `list_buildings`, `list_lots` and `query_cell` report them. Common occupant groups for
 `list_buildings`: `0x1400` power, `0x1503` schools, `0x1507` health.
@@ -319,11 +335,15 @@ timeout on progress then never cut the call. Other clients may stop waiting earl
 | `AllowControl` | `1` | `0` removes `set_speed`, `wait_months`, `save_city`, `set_funding`, `set_building_funding`, `set_tax` and `set_ordinance`. |
 | `AllowCheats` | `1` | `0` removes `run_cheat`. |
 | `AllowBuild` | `1` | `0` removes `place_zone`. |
-| `AuthToken` | (empty) | When set, every request to `/mcp` needs `Authorization: Bearer <AuthToken>`. |
+| `ReadOnly` | `0` | `1` turns off `AllowControl`, `AllowCheats` and `AllowBuild` at once. |
+| `ConfirmChanges` | `1` | Tools that change the city ask for a confirmation (see [Tools](#tools)); `0` applies at once. |
+| `AuthToken` | (empty) | When set, every request to `/mcp` needs `Authorization: Bearer <AuthToken>`. `auto` generates a random token at the next start and writes it to the file. |
 
-With `AllowControl=0`, `AllowCheats=0` and `AllowBuild=0` the server is read-only.
+**Client configurations.** With the game running, open `http://127.0.0.1:8765/setup` in a browser: the page lists
+the configuration of every client in this README (Claude Code, Claude Desktop, Cursor, VS Code, Windsurf, Gemini CLI,
+Codex, LM Studio) with the right port and the token already filled in, ready to copy.
 
-To use a token, add it to the client configuration as a header. For example in Cursor:
+To use a token by hand, add it to the client configuration as a header. For example in Cursor:
 
 ```json
 { "mcpServers": { "sc4": { "url": "http://127.0.0.1:8765/mcp", "headers": { "Authorization": "Bearer my-secret" } } } }
@@ -378,23 +398,27 @@ A typical balance test, as an assistant would run it:
 | Source file | Role |
 |---|---|
 | `src/McpDllDirector.cpp` | DLL entry point (COM director): reads the INI, starts the server and the tick service. |
-| `src/HttpServer.cpp` | Minimal HTTP/1.1 server on a worker thread, origin check. |
-| `src/McpServer.cpp` | JSON-RPC 2.0 / MCP: `initialize`, tools, resources, prompts, progress over server-sent events, token check, `/health`. |
+| `src/HttpServer.cpp` | Minimal HTTP/1.1 server, one thread per connection (at most 16), origin and host checks. |
+| `src/McpServer.cpp` | JSON-RPC 2.0 / MCP: `initialize`, tools, resources, prompts, progress and elicitation over server-sent events, token check, `/health` and `/setup`. |
 | `src/MainThreadQueue.cpp`, `src/TickService.cpp` | Hand-off of requests to the game thread. |
 | `src/Tools.cpp` | Tool registry, core tools (status, budget, speed, `wait_months`, cheats), resources and prompts. |
 | `src/ToolsRead.cpp` | Read-only tools (demand, utilities, services, cells, maps, lots, history, ordinances, advisors). |
-| `src/ToolsControl.cpp` | Funding, taxes, ordinances, saving and zoning. |
+| `src/ToolsControl.cpp` | Funding, taxes, ordinances, saving and zoning, with previews for the confirmations. |
+| `src/ToolsDiagnose.cpp` | Growth diagnostics, building properties and snapshots. |
 | `src/ToolsCommon.cpp` | Helpers shared by the tool modules (game thread, buildings, advisor data). |
 | `src/McpLog.cpp` | `SC4MCP.log`. |
 
 ## Security
 
 - The server binds to `127.0.0.1` only and is never reachable from other machines.
-- Requests whose `Origin` header is not a local address are refused (protection against DNS rebinding from web pages).
+- Requests whose `Origin` header is not a local address, or whose `Host` header is not a loopback name, are refused
+  (protection against web pages and DNS rebinding).
+- Changes to the city ask for a confirmation by default (`ConfirmChanges=1`), and `ReadOnly=1` turns them all off.
 - By default there is no authentication: any program running on the same PC can call the server while the game is
   open. Set `AuthToken` to require a bearer token, set `AllowControl=0`, `AllowCheats=0` and `AllowBuild=0` for a
   read-only server, or `Enabled=0` when you do not need it.
-- Every change to the city (speed, funding, taxes, ordinances, zoning, saving, cheats) is written to `SC4MCP.log`.
+- Every change to the city (speed, funding, taxes, ordinances, zoning, saving, cheats) and every confirmation is
+  written to `SC4MCP.log`.
 - `read_log` reads only `.log` files in the Plugins folder.
 
 ## Building from source
@@ -442,6 +466,18 @@ Issues and pull requests are welcome. Please:
 - test with SimCity 4 1.1.641 and describe the test in the pull request.
 
 ## Changelog
+
+### 1.2.0
+
+- Diagnostics: `diagnose_growth` and `diagnose_cell` explain why the city or a cell does not grow, from the game's own
+  state (demand, vacate reasons, development failures, power, road access, land value, pollution, crime).
+- `get_building_properties`: the properties of a building or any exemplar as the game loaded them.
+- Snapshots: `snapshot_save`, `snapshot_compare`, `snapshot_list`, `snapshot_delete`.
+- Confirmations: tools that change the city ask the user through MCP elicitation, or return a preview and wait for
+  `confirm=true`; all accept `dry_run=true`. New settings `ConfirmChanges` and `ReadOnly`; `AuthToken=auto`.
+- `http://127.0.0.1:8765/setup`: the configuration of every AI client, ready to copy.
+- Security: `Host` header check; one thread per connection.
+- Fixed: `list_graphs` and `get_history` read only the first line of each graph (array properties were not detected).
 
 ### 1.1.0
 

@@ -26,7 +26,7 @@ namespace ToolsCommon
 	// What a tool may do; each level can be turned off in SC4MCP.ini.
 	enum class Permission { Read, Control, Cheats, Build };
 
-	using Handler = std::function<json(const json& arguments, bool& isError, const Tools::Progress& progress)>;
+	using Handler = std::function<json(const json& arguments, bool& isError, const Tools::Context& context)>;
 
 	struct ToolDef
 	{
@@ -41,6 +41,22 @@ namespace ToolsCommon
 	void AddCoreTools(std::vector<ToolDef>& tools);
 	void AddReadTools(std::vector<ToolDef>& tools);
 	void AddControlTools(std::vector<ToolDef>& tools);
+	void AddDiagnosticTools(std::vector<ToolDef>& tools);
+
+	// Whether tools that change the city ask for a confirmation first (SC4MCP.ini ConfirmChanges).
+	bool ConfirmChangesEnabled();
+
+	// A tool that changes the city: preview (on the game thread) describes the change; apply (on the game thread)
+	// makes it. With dry_run=true only the preview is returned. When confirmations are on, the change is applied
+	// only after the user accepts it in the client (elicitation) or when the call passes confirm=true; otherwise the
+	// preview is returned with confirmation_required.
+	Handler Guarded(std::function<json(const json& arguments)> preview, std::function<json(const json& arguments)> apply,
+		std::function<std::string(const json& preview)> question);
+
+	// The call result of a tool, for tools that combine others (snapshots). Runs on the calling (HTTP) thread.
+	json CallTool(const std::string& name, const json& arguments, bool& isError);
+
+
 
 	// ------------------------------------------------------------------------------------------------- general
 	std::string Hex(uint32_t value);

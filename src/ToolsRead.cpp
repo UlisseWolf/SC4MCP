@@ -88,7 +88,7 @@ namespace
 		if (!value) return out;
 		const uint32_t count = value->GetCount();
 		const uint16_t type = value->GetType();
-		if ((type & 0x80) && (type & 0x7F) == 0x06) // Uint32Array
+		if (type == cIGZVariant::Uint32Array || type == cIGZVariant::Sint32Array)
 		{
 			const uint32_t* data = value->RefUint32();
 			if (data) out.assign(data, data + count);

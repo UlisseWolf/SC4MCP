@@ -164,7 +164,7 @@ namespace ToolsCommon
 
 	Handler GameThread(std::function<json(const json& arguments)> work)
 	{
-		return [work](const json& arguments, bool& isError, const Tools::Progress&) -> json
+		return [work](const json& arguments, bool& isError, const Tools::Context&) -> json
 		{
 			return OnGameThread([&] { return work(arguments); }, isError);
 		};

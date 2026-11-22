@@ -36,6 +36,7 @@ namespace
 	bool controlAllowed = true;
 	bool cheatsAllowed = true;
 	bool buildAllowed = true;
+	bool confirmChanges = true;
 
 	bool Allowed(Permission permission)
 	{
@@ -56,6 +57,7 @@ namespace
 			AddCoreTools(all);
 			AddReadTools(all);
 			AddControlTools(all);
+			AddDiagnosticTools(all);
 			return all;
 		}();
 		return tools;
@@ -391,7 +393,7 @@ namespace ToolsCommon
 		tools.push_back({ "read_log",
 			"Last lines of a log file next to the DLL: SC4SIM.log (default), SC4MCP.log or another *.log in the Plugins folder.",
 			Schema({ {"file", {{"type", "string"}}}, {"lines", {{"type", "integer"}, {"minimum", 1}, {"maximum", 1000}}} }), Permission::Read,
-			[](const json& arguments, bool& isError, const Tools::Progress&) -> json
+			[](const json& arguments, bool& isError, const Tools::Context&) -> json
 			{
 				const std::string file = arguments.value("file", std::string("SC4SIM.log"));
 				if (file.find_first_of("/\\:") != std::string::npos || file.size() < 5 || Lower(file.substr(file.size() - 4)) != ".log")
@@ -408,7 +410,7 @@ namespace ToolsCommon
 		tools.push_back({ "set_speed",
 			"Pause (0) or run the simulation at speed 1 (turtle) to 4 (cheetah). Returns the state after the game has applied it.",
 			Schema({ {"speed", {{"type", "integer"}, {"minimum", 0}, {"maximum", 4}}} }, json::array({ "speed" })), Permission::Control,
-			[](const json& arguments, bool& isError, const Tools::Progress&) -> json
+			[](const json& arguments, bool& isError, const Tools::Context&) -> json
 			{
 				return SetSpeed(std::clamp(arguments.at("speed").get<int>(), 0, 4), isError);
 			} });
@@ -417,8 +419,9 @@ namespace ToolsCommon
 			"Runs the simulation for the given number of game months (at speed 1-4), then pauses and returns the city status. Waits at most timeout_seconds (default 50) of real time. Sends progress notifications when the client asks for them.",
 			Schema({ {"months", {{"type", "integer"}, {"minimum", 1}, {"maximum", 120}}}, {"speed", {{"type", "integer"}, {"minimum", 1}, {"maximum", 4}}},
 				{"timeout_seconds", {{"type", "integer"}, {"minimum", 5}, {"maximum", 600}}} }, json::array({ "months" })), Permission::Control,
-			[](const json& arguments, bool& isError, const Tools::Progress& progress) -> json
+			[](const json& arguments, bool& isError, const Tools::Context& context) -> json
 			{
+				const Tools::Progress& progress = context.progress;
 				const int months = std::clamp(arguments.at("months").get<int>(), 1, 120);
 				const int speed = std::clamp(arguments.value("speed", 4), 1, 4);
 				const int timeout = std::clamp(arguments.value("timeout_seconds", 50), 5, 600);
@@ -426,19 +429,75 @@ namespace ToolsCommon
 			} });
 
 		tools.push_back({ "run_cheat",
-			"Runs a cheat code as if typed in the Ctrl+X box, including the cheats of DLL plugins (e.g. FundingReset, ScanPumps, IMZoneConvert, RemovePhantomBudgetItems Health).",
-			Schema({ {"cheat", {{"type", "string"}}} }, json::array({ "cheat" })), Permission::Cheats,
-			GameThread([](const json& arguments) { return RunCheat(arguments.at("cheat").get<std::string>()); }) });
+			"Runs a cheat code as if typed in the Ctrl+X box, including the cheats of DLL plugins (e.g. FundingReset, ScanPumps, IMZoneConvert, RemovePhantomBudgetItems Health). Asks for confirmation; dry_run=true only checks the cheat.",
+			Schema({ {"cheat", {{"type", "string"}}}, {"dry_run", {{"type", "boolean"}}}, {"confirm", {{"type", "boolean"}}} }, json::array({ "cheat" })), Permission::Cheats,
+			Guarded([](const json& arguments) -> json
+				{
+					cISC4AppPtr app;
+					cIGZCheatCodeManager* cheats = app ? app->GetCheatCodeManager() : nullptr;
+					if (!cheats) return Error("Cheat code manager unavailable.");
+					const std::string text = arguments.at("cheat").get<std::string>();
+					cRZBaseString line(text.c_str());
+					uint32_t id = 0;
+					if (!cheats->DoesCheatCodeMatch(line, id)) return Error("Unknown cheat: " + text);
+					return json{ {"action", "run_cheat"}, {"cheat", text}, {"id", Hex(id)} };
+				},
+				[](const json& arguments) { return RunCheat(arguments.at("cheat").get<std::string>()); },
+				[](const json& plan) { return "Run the cheat \"" + plan.value("cheat", std::string()) + "\"?"; }) });
 	}
 }
 
 // ===================================================================================================== Tools API
 
-void Tools::Configure(bool allowControl, bool allowCheats, bool allowBuild)
+void Tools::Configure(bool allowControl, bool allowCheats, bool allowBuild, bool confirm)
 {
 	controlAllowed = allowControl;
 	cheatsAllowed = allowCheats;
 	buildAllowed = allowBuild;
+	confirmChanges = confirm;
+}
+
+namespace ToolsCommon
+{
+	bool ConfirmChangesEnabled() { return confirmChanges; }
+
+	json CallTool(const std::string& name, const json& arguments, bool& isError)
+	{
+		return Tools::Call(name, arguments, isError);
+	}
+
+	Handler Guarded(std::function<json(const json&)> preview, std::function<json(const json&)> apply,
+		std::function<std::string(const json&)> question)
+	{
+		return [preview, apply, question](const json& arguments, bool& isError, const Tools::Context& context) -> json
+		{
+			json plan = OnGameThread([&] { return preview(arguments); }, isError);
+			if (isError) return plan;
+			if (arguments.value("dry_run", false))
+			{
+				plan["dry_run"] = true;
+				return plan;
+			}
+			if (ConfirmChangesEnabled() && !arguments.value("confirm", false))
+			{
+				const int answer = context.confirm ? context.confirm(question(plan)) : -1;
+				if (answer == 0)
+				{
+					plan["cancelled"] = true;
+					plan["note"] = "The user did not confirm the change: nothing was changed.";
+					return plan;
+				}
+				if (answer < 0)
+				{
+					plan["confirmation_required"] = true;
+					plan["note"] = "Nothing was changed. Show this preview to the user and, if they agree, call the tool again with the same arguments and confirm=true.";
+					return plan;
+				}
+			}
+			json result = OnGameThread([&] { return apply(arguments); }, isError);
+			return result;
+		};
+	}
 }
 
 json Tools::List()
@@ -449,14 +508,14 @@ json Tools::List()
 		if (!Allowed(tool.permission)) continue;
 		json entry{ {"name", tool.name}, {"description", tool.description}, {"inputSchema", tool.inputSchema} };
 		const bool readOnly = tool.permission == Permission::Read;
-		entry["annotations"] = json{ {"readOnlyHint", readOnly}, {"destructiveHint", tool.permission == Permission::Build},
-			{"openWorldHint", false} };
+		entry["annotations"] = json{ {"readOnlyHint", readOnly}, {"destructiveHint", tool.permission == Permission::Build || tool.permission == Permission::Cheats},
+			{"idempotentHint", readOnly}, {"openWorldHint", false} };
 		list.push_back(entry);
 	}
 	return list;
 }
 
-json Tools::Call(const std::string& name, const json& arguments, bool& isError, const Progress& progress)
+json Tools::Call(const std::string& name, const json& arguments, bool& isError, const Context& context)
 {
 	isError = false;
 	for (const ToolDef& tool : Registry())
@@ -469,7 +528,7 @@ json Tools::Call(const std::string& name, const json& arguments, bool& isError, 
 		}
 		try
 		{
-			return tool.run(arguments, isError, progress);
+			return tool.run(arguments, isError, context);
 		}
 		catch (const std::exception& error)
 		{

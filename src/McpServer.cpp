@@ -1,24 +1,87 @@
 // SC4MCP - MCP JSON-RPC protocol.
 //
 // Implements initialize, ping, tools/list, tools/call, resources/list, resources/read, prompts/list and prompts/get
-// over the Streamable HTTP transport. Responses are a single JSON body, except a tools/call that carries a
-// progressToken from a client that accepts text/event-stream: its progress notifications and its result are sent as
-// server-sent events on the same response. GET /mcp answers 405 because the server never pushes messages on its own.
-// With AuthToken set in SC4MCP.ini, /mcp requires "Authorization: Bearer <token>".
+// over the Streamable HTTP transport. Responses are a single JSON body, except when a tools/call from a client that
+// accepts text/event-stream sends progress notifications (it gave a progressToken) or asks the user to confirm a
+// change (elicitation, when the client declared it): then the notifications, the elicitation/create request and the
+// result are server-sent events on that response, and the client POSTs its answer to the elicitation as a separate
+// request. GET /mcp answers 405 because the server never pushes messages on its own. With AuthToken set in
+// SC4MCP.ini, /mcp requires "Authorization: Bearer <token>". GET /setup shows the client configurations.
 #include "McpServer.h"
 #include "McpLog.h"
 #include "Tools.h"
 #include "json.hpp"
 
+#include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <condition_variable>
 #include <functional>
+#include <map>
+#include <mutex>
 
 using nlohmann::json;
 
 namespace
 {
 	constexpr const char* kServerName = "SC4MCP";
-	constexpr const char* kServerVersion = "1.1.0";
+	constexpr const char* kServerVersion = "1.2.0";
 	std::string authToken;
+	uint16_t serverPort = 8765;
+	std::atomic<bool> clientElicitation{ false };
+
+	// Elicitations waiting for the client's answer, by request id.
+	struct PendingAnswer { bool done = false; json response; };
+	std::mutex pendingMutex;
+	std::condition_variable pendingAnswered;
+	std::map<std::string, PendingAnswer> pendingAnswers;
+	std::atomic<unsigned> elicitationCounter{ 0 };
+
+	std::string IdKey(const json& id) { return id.is_string() ? id.get<std::string>() : id.dump(); }
+
+	// A JSON-RPC response from the client (no method, an id and a result or an error).
+	bool IsClientResponse(const json& message)
+	{
+		return message.is_object() && !message.contains("method") && message.contains("id") && (message.contains("result") || message.contains("error"));
+	}
+
+	bool DeliverClientResponse(const json& message)
+	{
+		std::lock_guard<std::mutex> lock(pendingMutex);
+		const auto found = pendingAnswers.find(IdKey(message["id"]));
+		if (found == pendingAnswers.end()) return false;
+		found->second.done = true;
+		found->second.response = message;
+		pendingAnswered.notify_all();
+		return true;
+	}
+
+	// Sends elicitation/create on the stream and waits (at most 3 minutes) for the user's answer.
+	int AskUser(HttpServer::Stream& stream, const std::string& message)
+	{
+		const std::string id = "sc4mcp-confirm-" + std::to_string(++elicitationCounter);
+		{
+			std::lock_guard<std::mutex> lock(pendingMutex);
+			pendingAnswers[id] = {};
+		}
+		const json request{ {"jsonrpc", "2.0"}, {"id", id}, {"method", "elicitation/create"}, {"params", {
+			{"message", message},
+			{"requestedSchema", {{"type", "object"}, {"properties", {{"confirm", {{"type", "boolean"}, {"title", "Apply this change"},
+				{"description", "Leave on to apply the change in the city."}, {"default", true}}}}}, {"required", json::array()}}} }} };
+		stream.Event(request.dump());
+		McpLog::Write("Asking the user to confirm: %s", message.c_str());
+		std::unique_lock<std::mutex> lock(pendingMutex);
+		const bool answered = pendingAnswered.wait_for(lock, std::chrono::minutes(3), [&] { return pendingAnswers[id].done; });
+		const json response = pendingAnswers[id].response;
+		pendingAnswers.erase(id);
+		lock.unlock();
+		if (!answered || !response.contains("result")) return 0;
+		const json& result = response["result"];
+		const bool accepted = result.value("action", std::string()) == "accept"
+			&& !(result.contains("content") && result["content"].is_object() && result["content"].value("confirm", true) == false);
+		McpLog::Write("The user %s the change.", accepted ? "accepted" : "declined");
+		return accepted ? 1 : 0;
+	}
 	const char* const kProtocols[] = { "2025-06-18", "2025-03-26", "2024-11-05" };
 
 	constexpr const char* kInstructions =
@@ -43,8 +106,8 @@ namespace
 	// Sends a progress notification for a tools/call that asked for it.
 	using Notify = std::function<void(const json& notification)>;
 
-	// Returns a response, or null for a notification.
-	json HandleMessage(const json& message, const Notify& notify = {})
+	// Returns a response, or null for a notification. stream (may be null) carries progress and elicitations.
+	json HandleMessage(const json& message, const Notify& notify = {}, HttpServer::Stream* stream = nullptr)
 	{
 		if (!message.is_object() || message.value("jsonrpc", "") != "2.0" || !message.contains("method") || !message["method"].is_string())
 		{
@@ -69,6 +132,7 @@ namespace
 			{
 				if (requested == supported) version = supported;
 			}
+			clientElicitation = params.contains("capabilities") && params["capabilities"].is_object() && params["capabilities"].contains("elicitation");
 			std::string client = "unknown";
 			if (params.contains("clientInfo") && params["clientInfo"].is_object()) client = params["clientInfo"].value("name", client);
 			McpLog::Write("initialize from %s (protocol %s -> %s)", client.c_str(), requested.c_str(), version.c_str());
@@ -96,7 +160,9 @@ namespace
 					notify(json{ {"jsonrpc", "2.0"}, {"method", "notifications/progress"}, {"params", p} });
 				};
 			}
-			json output = Tools::Call(name, arguments, isError, progress);
+			Tools::Confirm confirm;
+			if (stream && clientElicitation) confirm = [stream](const std::string& text) { return AskUser(*stream, text); };
+			json output = Tools::Call(name, arguments, isError, Tools::Context{ progress, confirm });
 			McpLog::Write("tools/call %s%s", name.c_str(), isError ? " (error)" : "");
 			json result{ {"content", json::array({ {{"type", "text"}, {"text", output.dump(2)}} })}, {"isError", isError} };
 			if (output.is_object()) result["structuredContent"] = output;
@@ -135,9 +201,53 @@ namespace
 	}
 }
 
-void McpServer::Configure(const std::string& token)
+void McpServer::Configure(const std::string& token, uint16_t port)
 {
 	authToken = token;
+	serverPort = port;
+}
+
+namespace
+{
+	std::string SetupPage()
+	{
+		const std::string url = "http://127.0.0.1:" + std::to_string(serverPort) + "/mcp";
+		const bool hasToken = !authToken.empty();
+		const std::string bearer = "Bearer " + authToken;
+		auto block = [](const std::string& title, const std::string& where, const std::string& code)
+		{
+			std::string escaped;
+			for (char c : code) { if (c == '<') escaped += "&lt;"; else if (c == '>') escaped += "&gt;"; else if (c == '&') escaped += "&amp;"; else escaped += c; }
+			return "<section><h2>" + title + "</h2><p>" + where + "</p><pre><code>" + escaped + "</code></pre></section>\n";
+		};
+		const std::string headersJson = hasToken ? ",\n      \"headers\": { \"Authorization\": \"" + bearer + "\" }" : "";
+		std::string html = "<!DOCTYPE html><html lang=\"en\"><head><meta charset=\"utf-8\"><title>SC4MCP setup</title><style>"
+			"body{font-family:Segoe UI,Arial,sans-serif;max-width:860px;margin:2em auto;padding:0 1em;color:#222}"
+			"pre{background:#f4f4f4;padding:1em;overflow-x:auto;border-radius:6px}h1{margin-bottom:.2em}h2{margin-top:1.6em}"
+			".note{background:#fff8e1;padding:.8em 1em;border-radius:6px}</style></head><body>"
+			"<h1>SC4MCP " + std::string(kServerVersion) + "</h1><p>The MCP server of this game is at <code>" + url + "</code>. "
+			"Copy the configuration of your AI client, save it and restart the client.</p>";
+		if (hasToken) html += "<p class=\"note\">This server requires a token: it is already filled in below. Keep it private.</p>";
+		html += block("Claude Code", "Run in a terminal:", "claude mcp add --transport http sc4 " + url + (hasToken ? " --header \"Authorization: " + bearer + "\"" : ""));
+		html += block("Claude Desktop", "Settings &gt; Developer &gt; Edit Config (needs Node.js), then quit Claude Desktop completely and start it again:",
+			"{\n  \"mcpServers\": {\n    \"sc4\": {\n      \"command\": \"npx\",\n      \"args\": [\"-y\", \"mcp-remote\", \"" + url + "\""
+			+ (hasToken ? ", \"--header\", \"Authorization: " + bearer + "\"" : "") + "]\n    }\n  }\n}");
+		html += block("Cursor", "%USERPROFILE%\\.cursor\\mcp.json:",
+			"{\n  \"mcpServers\": {\n    \"sc4\": {\n      \"url\": \"" + url + "\"" + headersJson + "\n    }\n  }\n}");
+		html += block("VS Code (GitHub Copilot agent mode)", ".vscode/mcp.json, or MCP: Open User Configuration:",
+			"{\n  \"servers\": {\n    \"sc4\": {\n      \"type\": \"http\",\n      \"url\": \"" + url + "\"" + headersJson + "\n    }\n  }\n}");
+		html += block("Windsurf", "%USERPROFILE%\\.codeium\\windsurf\\mcp_config.json:",
+			"{\n  \"mcpServers\": {\n    \"sc4\": {\n      \"serverUrl\": \"" + url + "\"" + headersJson + "\n    }\n  }\n}");
+		html += block("Gemini CLI", "%USERPROFILE%\\.gemini\\settings.json:",
+			"{\n  \"mcpServers\": {\n    \"sc4\": {\n      \"httpUrl\": \"" + url + "\"" + headersJson + "\n    }\n  }\n}");
+		html += block("Codex CLI and ChatGPT desktop app", "%USERPROFILE%\\.codex\\config.toml:",
+			"[mcp_servers.sc4]\nurl = \"" + url + "\"\ntool_timeout_sec = 300" + (hasToken ? "\nhttp_headers = { \"Authorization\" = \"" + bearer + "\" }" : ""));
+		html += block("LM Studio", "Program &gt; Install &gt; Edit mcp.json:",
+			"{\n  \"mcpServers\": {\n    \"sc4\": {\n      \"url\": \"" + url + "\"" + headersJson + "\n    }\n  }\n}");
+		html += "<p>ChatGPT on the web and claude.ai cannot reach this PC: use one of the clients above. "
+			"More in the README: https://github.com/UlisseWolf/SC4MCP</p></body></html>";
+		return html;
+	}
 }
 
 HttpServer::Response McpServer::HandleHttp(const HttpServer::Request& http, HttpServer::Stream& stream)
@@ -149,7 +259,8 @@ HttpServer::Response McpServer::HandleHttp(const HttpServer::Request& http, Http
 	{
 		return { 200, "application/json", json{ {"server", kServerName}, {"version", kServerVersion}, {"ok", true} }.dump() };
 	}
-	if (path != "/mcp") return { 404, "text/plain", "Not found. The MCP endpoint is /mcp" };
+	if (path == "/setup" && method == "GET") return { 200, "text/html; charset=utf-8", SetupPage() };
+	if (path != "/mcp") return { 404, "text/plain", "Not found. The MCP endpoint is /mcp; the client configurations are at /setup" };
 	if (method != "POST") return { 405, "text/plain", "Use POST" };
 	if (!Authorized(http.authorization))
 	{
@@ -159,6 +270,18 @@ HttpServer::Response McpServer::HandleHttp(const HttpServer::Request& http, Http
 
 	json request = json::parse(body, nullptr, false);
 	if (request.is_discarded()) return { 400, "application/json", Error(nullptr, -32700, "Parse error").dump() };
+
+	// Answers of the client to an elicitation (possibly in a batch).
+	if (IsClientResponse(request))
+	{
+		DeliverClientResponse(request);
+		return { 202, "application/json", "" };
+	}
+	if (request.is_array() && !request.empty() && std::all_of(request.begin(), request.end(), IsClientResponse))
+	{
+		for (const json& message : request) DeliverClientResponse(message);
+		return { 202, "application/json", "" };
+	}
 
 	if (request.is_array())
 	{
@@ -171,18 +294,21 @@ HttpServer::Response McpServer::HandleHttp(const HttpServer::Request& http, Http
 		if (responses.empty()) return { 202, "application/json", "" };
 		return { 200, "application/json", responses.dump() };
 	}
-	// A single tools/call with a progress token, from a client that accepts SSE: stream the progress and the result.
-	const bool wantsProgress = request.is_object() && request.value("method", "") == "tools/call" && request.contains("params")
-		&& request["params"].is_object() && request["params"].contains("_meta") && request["params"]["_meta"].is_object()
-		&& request["params"]["_meta"].contains("progressToken") && http.accept.find("text/event-stream") != std::string::npos;
-	if (wantsProgress)
+	// A single tools/call from a client that accepts SSE: progress notifications and elicitations go on the stream,
+	// which starts only when the tool sends one; otherwise the answer is a plain JSON body.
+	const bool canStream = request.is_object() && request.value("method", "") == "tools/call" && http.accept.find("text/event-stream") != std::string::npos;
+	if (canStream)
 	{
 		Notify notify = [&stream](const json& notification) { stream.Event(notification.dump()); };
-		json response = HandleMessage(request, notify);
-		stream.Event(response.dump());
-		HttpServer::Response streamed;
-		streamed.streamed = true;
-		return streamed;
+		json response = HandleMessage(request, notify, &stream);
+		if (stream.Started())
+		{
+			stream.Event(response.dump());
+			HttpServer::Response streamed;
+			streamed.streamed = true;
+			return streamed;
+		}
+		return { 200, "application/json", response.dump() };
 	}
 
 	json response = HandleMessage(request);

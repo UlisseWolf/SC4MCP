@@ -17,10 +17,10 @@ public:
 	uint32_t Release() override;
 
 	uint32_t GetServiceID() override { return serviceID; }
-	cIGZSystemService* SetServiceID(uint32_t id) override { serviceID = id; return this; }
+	void SetServiceID(uint32_t id) override { serviceID = id; }
 	int32_t GetServicePriority() override { return 0; }
 	bool IsServiceRunning() override { return running; }
-	cIGZSystemService* SetServiceRunning(bool value) override { running = value; return this; }
+	void SetServiceRunning(bool value) override { running = value; }
 	bool Init() override { return true; }
 	bool Shutdown() override { return true; }
 	bool OnTick(uint32_t elapsed) override;

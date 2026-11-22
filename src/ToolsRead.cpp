@@ -432,9 +432,12 @@ namespace
 			out["police"] = json{ {"stations", police->GetPoliceStationCount()}, {"coverage_percent", police->GetPercentCoverage()},
 				{"average_coverage", police->GetAverageCoverage()}, {"criminals", police->GetCriminalCount()},
 				{"arrests", police->GetArrestCount()}, {"dispatches", police->GetTotalDispatchCount()}, {"on_strike", police->IsOnStrike()} };
+			// The upkeep is reported per jail: add up the jails of the city.
+			long long jailUpkeep = 0;
+			for (cISC4Occupant* occupant : AllBuildings(city)) if (police->IsJail(occupant)) jailUpkeep += police->GetJailCurrentUpkeepCost(occupant);
 			out["jails"] = json{ {"jails", police->GetJailCount()}, {"capacity", police->GetJailCapacity()},
 				{"inmates", police->GetJailPopulation()}, {"jailed_percent", police->GetJailedPercentage()},
-				{"monthly_upkeep", police->GetJailCurrentUpkeepCost()} };
+				{"monthly_upkeep", jailUpkeep} };
 		}
 		if (cISC4CrimeSimulator* crime = city->GetCrimeSimulator())
 		{
@@ -482,6 +485,7 @@ namespace
 				else if (isJail)
 				{
 					b["capacity"] = police->GetJailCapacity(occupant);
+					b["monthly_upkeep"] = police->GetJailCurrentUpkeepCost(occupant);
 					jails.push_back(b);
 				}
 				else if (isPolice)

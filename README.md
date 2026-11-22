@@ -38,7 +38,7 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 ## Features
 
 - **Runs in the game process.** No external program, no memory scanning: the DLL uses the game's own COM interfaces
-  through the [gzcom-dll](https://github.com/nsgomez/gzcom-dll) SDK.
+  through the [gzcom-dll](https://github.com/SC4SDK/gzcom-dll) SDK.
 - **Read the whole city.** Status, budget down to each building, RCI demand with caps, power, water and garbage,
   education, health, police, jails and fire, ordinances, advisor messages, any city cell, statistics of every map,
   lots and the monthly history of every graph of the Graphs window.
@@ -498,6 +498,23 @@ A typical balance test, as an assistant would run it:
 Visual Studio 2022 with the *Desktop development with C++* workload. The game is 32-bit, so the DLL must be built
 for **x86 (Win32)**.
 
+**Get the source**
+
+The [gzcom-dll](https://github.com/SC4SDK/gzcom-dll) SDK is a git submodule in `vendor/gzcom-dll`, so clone with
+submodules:
+
+```sh
+git clone --recursive -b staging https://github.com/UlisseWolf/SC4MCP.git
+```
+
+In a copy cloned without `--recursive`, or to move the SDK to its latest commit, run:
+
+```sh
+git submodule update --init --remote
+```
+
+A ZIP downloaded from GitHub does not contain the submodule: clone the repository instead.
+
 **Visual Studio**
 
 1. Open `SC4MCP.sln`.
@@ -511,7 +528,8 @@ cmake -S . -B build -A Win32
 cmake --build build --config Release
 ```
 
-All dependencies are vendored in `vendor/`; nothing else needs to be installed.
+The other dependency, [nlohmann/json](https://github.com/nlohmann/json), is included in `vendor/nlohmann`; nothing
+else needs to be installed.
 
 ## Troubleshooting
 
@@ -540,6 +558,9 @@ Issues and pull requests are welcome. Please:
 ## Changelog
 
 ### 1.4.0
+
+- The gzcom-dll SDK is now the [SC4SDK](https://github.com/SC4SDK/gzcom-dll) version, as a git submodule. Its
+  corrected signatures fix the monthly upkeep of jails (now the sum of every jail, also shown per jail).
 
 - Players: `suggest_location` (where to build schools, hospitals, fire and police stations), `tax_what_if`,
   `get_region`, `export_csv`, and `render_map highlight`.
@@ -594,7 +615,7 @@ Third-party code in `vendor/`:
 
 | Component | License |
 |---|---|
-| [gzcom-dll](https://github.com/nsgomez/gzcom-dll) SDK (`vendor/gzcom-dll`) | LGPL 2.1, see `vendor/gzcom-dll/LICENSE` |
+| [gzcom-dll](https://github.com/SC4SDK/gzcom-dll) SDK (`vendor/gzcom-dll`, git submodule) | LGPL 2.1, see `vendor/gzcom-dll/LICENSE` |
 | [nlohmann/json](https://github.com/nlohmann/json) 3.11.3 (`vendor/nlohmann`) | MIT, see `vendor/nlohmann/LICENSE.MIT` |
 
 SimCity 4 is a trademark of Electronic Arts Inc. This project is not affiliated with or endorsed by Electronic Arts.

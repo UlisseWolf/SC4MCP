@@ -3,7 +3,7 @@
 **A Model Context Protocol server that runs inside SimCity 4.**
 
 [![Build](https://github.com/UlisseWolf/SC4MCP/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/UlisseWolf/SC4MCP/actions/workflows/build.yml)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![License: LGPL v2.1](https://img.shields.io/badge/License-LGPL_v2.1-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20(x86)-lightgrey)
 ![Game](https://img.shields.io/badge/SimCity%204-1.1.641-green)
 ![MCP](https://img.shields.io/badge/MCP-Streamable%20HTTP-purple)
@@ -612,7 +612,7 @@ Every version and its changes are listed in [Changelog.md](Changelog.md).
 
 ## License
 
-SC4MCP is released under the [MIT License](LICENSE).
+SC4MCP is released under the [GNU Lesser General Public License, version 2.1](LICENSE).
 
 Third-party code in `vendor/`:
 

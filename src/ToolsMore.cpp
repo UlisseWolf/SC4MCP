@@ -253,8 +253,8 @@ namespace
 		{
 			for (size_t i = 0; i < columns.size(); ++i)
 			{
-				const auto found = values.find(columns[i]);
-				file << (i ? "," : "") << (found != values.end() ? CsvField(found->second) : std::string());
+				const auto cell = values.find(columns[i]);
+				file << (i ? "," : "") << (cell != values.end() ? CsvField(cell->second) : std::string());
 			}
 			file << "\r\n";
 		}

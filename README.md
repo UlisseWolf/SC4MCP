@@ -24,7 +24,7 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - [Tools](#tools)
 - [Requirements](#requirements)
 - [Installation](#installation)
-- [Connecting an MCP client](#connecting-an-mcp-client)
+- [Connecting an MCP client](#connecting-an-mcp-client) (Claude, Cursor, VS Code, Windsurf, Gemini CLI, Codex, LM Studio)
 - [Configuration](#configuration)
 - [Example session](#example-session)
 - [How it works](#how-it-works)
@@ -67,8 +67,9 @@ Common occupant groups for `list_buildings`: `0x1400` power, `0x1503` schools, `
 
 - SimCity 4 Deluxe or Rush Hour, **version 1.1.641** (Windows; the Steam and GOG versions are 641).
 - Windows 10 or 11.
-- An MCP client that supports the Streamable HTTP transport, or Node.js for the
-  [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge (Claude Desktop).
+- An MCP client running on the same PC that supports the Streamable HTTP transport (Claude Code, Cursor, VS Code,
+  Windsurf, Gemini CLI, Codex, LM Studio...), or Node.js for the
+  [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) bridge (Claude Desktop and stdio-only clients).
 
 ## Installation
 
@@ -115,10 +116,150 @@ The server is on your PC, so it must be added as a local server: a custom connec
 
 Quit Claude Desktop completely (including the tray icon) and start it again.
 
-### Other clients
+### Other AI clients
 
-Any client that speaks MCP over Streamable HTTP can connect to the same URL. Clients that only support stdio can use
-`mcp-remote` as shown above.
+SC4MCP is a standard MCP server, so any MCP client that runs **on the same PC as the game** can use it. Most clients
+take the URL directly; the configuration key differs from client to client.
+
+| Client | Configuration file | Key for the URL |
+|---|---|---|
+| Claude Code | `claude mcp add` (see above) | - |
+| Claude Desktop | `claude_desktop_config.json` | via `mcp-remote` (see above) |
+| Cursor | `%USERPROFILE%\.cursor\mcp.json` or `.cursor/mcp.json` | `url` |
+| VS Code (GitHub Copilot agent mode) | `.vscode/mcp.json` or the user `mcp.json` | `type: "http"` + `url` |
+| Windsurf | `%USERPROFILE%\.codeium\windsurf\mcp_config.json` | `serverUrl` |
+| Gemini CLI | `%USERPROFILE%\.gemini\settings.json` | `httpUrl` |
+| Codex CLI / ChatGPT desktop app | `%USERPROFILE%\.codex\config.toml` | `url` |
+| LM Studio (local models) | `mcp.json` (Program > Install > Edit mcp.json) | `url` |
+
+> SC4MCP has been tested with Claude Code and Claude Desktop. The other configurations follow each client's
+> documentation; please open an issue if one of them needs a change.
+
+#### Cursor
+
+`~/.cursor/mcp.json` (all projects) or `.cursor/mcp.json` (one project):
+
+```json
+{
+  "mcpServers": {
+    "sc4": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+#### VS Code (GitHub Copilot agent mode)
+
+`.vscode/mcp.json` in the workspace, or *MCP: Open User Configuration* from the Command Palette. VS Code uses the key
+`servers` and needs `"type": "http"`, otherwise it tries to start a local process:
+
+```json
+{
+  "servers": {
+    "sc4": {
+      "type": "http",
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+Or from a terminal:
+
+```sh
+code --add-mcp "{\"name\":\"sc4\",\"type\":\"http\",\"url\":\"http://127.0.0.1:8765/mcp\"}"
+```
+
+The tools are available in Copilot Chat in **Agent** mode.
+
+#### Windsurf
+
+`%USERPROFILE%\.codeium\windsurf\mcp_config.json` (or *Windsurf Settings > Cascade > MCP Servers > View raw
+config*). Windsurf uses `serverUrl`, not `url`:
+
+```json
+{
+  "mcpServers": {
+    "sc4": {
+      "serverUrl": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+Press the refresh button of the MCP panel after saving.
+
+#### Gemini CLI
+
+`~/.gemini/settings.json` (all projects) or `.gemini/settings.json` (one project). `httpUrl` selects the Streamable
+HTTP transport (`url` would mean SSE):
+
+```json
+{
+  "mcpServers": {
+    "sc4": {
+      "httpUrl": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+Run `/mcp` inside Gemini CLI to check that the seven tools are listed.
+
+#### Codex CLI and the ChatGPT desktop app
+
+The Codex CLI, its IDE extension and the ChatGPT desktop app share `~/.codex/config.toml`:
+
+```sh
+codex mcp add sc4 --url http://127.0.0.1:8765/mcp
+```
+
+or by hand:
+
+```toml
+[mcp_servers.sc4]
+url = "http://127.0.0.1:8765/mcp"
+tool_timeout_sec = 300   # wait_months can take longer than the default 60 seconds
+```
+
+Run `/mcp` inside Codex to check the connection.
+
+#### LM Studio (local models)
+
+LM Studio 0.3.17 or later can give the SC4MCP tools to a model running on your own PC, with no cloud service. Open
+*Program > Install > Edit mcp.json* (Cursor notation):
+
+```json
+{
+  "mcpServers": {
+    "sc4": {
+      "url": "http://127.0.0.1:8765/mcp"
+    }
+  }
+}
+```
+
+Use a model trained for tool calling: small models often call the tools with wrong parameters or stop after one call.
+
+#### Other clients
+
+Any other client that speaks MCP over Streamable HTTP can connect to `http://127.0.0.1:8765/mcp`. A client that only
+supports stdio can use the `mcp-remote` bridge, exactly as in the Claude Desktop example.
+
+### Assistants in the cloud (ChatGPT web, claude.ai)
+
+Web assistants call MCP servers from their own servers on the internet, so they cannot reach `127.0.0.1`: ChatGPT's
+developer mode and the custom connectors of claude.ai need a public HTTPS address. A tunnel (for example OpenAI's
+Secure MCP Tunnel, ngrok or Cloudflare Tunnel) would make SC4MCP reachable, but **SC4MCP has no authentication**:
+anyone who knows the tunnel address could pause your game or run cheats. If you do it anyway, set `AllowControl=0`
+and `AllowCheats=0`, and close the tunnel when you are done. Prefer a desktop client from the list above.
+
+### Long calls
+
+`wait_months` holds the call open until the months have passed (by default at most 50 seconds, up to
+`timeout_seconds`). Some clients stop waiting earlier: raise the client's tool timeout (for example
+`tool_timeout_sec` in Codex) before asking for more than 50 seconds.
 
 ## Configuration
 
@@ -216,6 +357,10 @@ All dependencies are vendored in `vendor/`; nothing else needs to be installed.
 | Tools return "No city is open" | Open a city: the region view has no city to read. |
 | Tools time out after 10 s | The game is minimized, loading, or showing a dialog. Bring it to the front. |
 | Claude Desktop does not list the tools | Add the server through `mcp-remote` (not as a custom connector), then restart Claude Desktop completely. |
+| ChatGPT says "Unsafe URL" | ChatGPT web cannot reach `127.0.0.1`: use a desktop client (see [Assistants in the cloud](#assistants-in-the-cloud-chatgpt-web-claudeai)). |
+| VS Code tries to run a command | `"type": "http"` is missing, or the entry is under `mcpServers` instead of `servers`. |
+| Windsurf connects to nothing, no error | The key must be `serverUrl`, not `url`. |
+| `wait_months` is cut off by the client | Raise the client's tool timeout (see [Long calls](#long-calls)). |
 | `http://127.0.0.1:8765/health` does not open | The game is not running, or `Enabled=0`. |
 
 ## Contributing

@@ -32,36 +32,80 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - [Building from source](#building-from-source)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
+- [Changelog](#changelog)
 - [License](#license)
 
 ## Features
 
 - **Runs in the game process.** No external program, no memory scanning: the DLL uses the game's own COM interfaces
   through the [gzcom-dll](https://github.com/nsgomez/gzcom-dll) SDK.
-- **Read the city.** Date, population, funds, income and expenses, RCI demand, every budget department with its line
-  items, every building with its exemplar ID and monthly cost.
-- **Drive the simulation.** Pause, change the speed, run for N game months and get the result back, run cheat codes
-  (including the cheats registered by other DLL plugins).
+- **Read the whole city.** Status, budget down to each building, RCI demand with caps, power, water and garbage,
+  education, health, police, jails and fire, ordinances, advisor messages, any city cell, statistics of every map,
+  lots and the monthly history of every graph of the Graphs window.
+- **Drive the simulation.** Pause, change the speed, run for N game months with live progress, save the city, run
+  cheat codes (including the cheats registered by other DLL plugins).
+- **Manage the city.** Department and building funding, tax rates, ordinances and zoning.
 - **Read plugin logs.** The last lines of any `.log` file in the Plugins folder, for example `SC4SIM.log`.
-- **Safe by default.** Listens on `127.0.0.1` only, rejects non-local browser origins, and the control and cheat
-  tools can be turned off in `SC4MCP.ini`.
-- **Standard MCP.** Streamable HTTP transport, protocol versions `2025-06-18`, `2025-03-26` and `2024-11-05`.
+- **Safe by default.** Listens on `127.0.0.1` only, rejects non-local browser origins, optional bearer token, and
+  every group of tools that changes the city can be turned off in `SC4MCP.ini`.
+- **Standard MCP.** Streamable HTTP transport (protocol versions `2025-06-18`, `2025-03-26`, `2024-11-05`) with
+  tools, resources, prompts and progress notifications.
 
-SC4MCP does not place buildings, zones or networks: building the city stays with the player.
+SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): those stay with the player.
 
 ## Tools
 
+### Read the city
+
+| Tool | Parameters | Description |
+|---|---|---|
+| `get_city_status` | - | Name, size, date, pause state and speed, population, funds, monthly income and expense, RCI demand of each type. |
+| `get_budget` | `per_building` (bool) | Funds, totals and loans, every department with its funding and line items; with `per_building=true`, every building with its cells and budget items. |
+| `get_demand` | - | Every RCI type: demand, supply, active demand and its range, new demand and supply, economy and tax modifiers; neutral tax rate; the cap fields of the advisor data. |
+| `get_taxes` | - | The twelve tax rates. |
+| `get_utilities` | `per_plant` (bool, default true) | Power (production, consumption, imports, plants, and per plant: output, load, efficiency, condition, cost), garbage (produced, landfilled, recycled, incinerated, capacity) and the water fields of the advisor data. |
+| `get_services` | `per_building` (bool) | Education (coverage, EQ, grades), health (coverage, patients against capacity, life expectancy), police, jails, crime and fire; with `per_building=true`, schools and hospitals with capacity and radius, police and fire stations and jails. |
+| `list_buildings` | `name_contains`, `occupant_group` (e.g. `0x1503`), `limit` (1-2000) | Buildings with exemplar ID, city cells and monthly cost. |
+| `list_lots` | `zone`, `state` (`occupied`, `vacant`, `abandoned`...), `powered` (bool), `limit` | Lots with a building: zone, state, occupancy, population and capacity per type, wealth, land value, power and road access. |
+| `query_cell` | `x`, `z` | One cell: zone, lot and building, land value, pollution, crime, police and fire coverage, power, congestion. |
+| `get_map_stats` | `map`, `top` (0-50), `developed_only` (bool) | Min, max, average, histogram and worst cells of `zones`, `land_value`, `crime`, `air_pollution`, `water_pollution`, `garbage`, `fire_protection`, `police_coverage`, `congestion` or `powered`. |
+| `list_graphs` | - | Every graph of the Graphs window with the history type and label of each line. |
+| `get_history` | `graph` or `history_types`, `months` (1-600) | Monthly values of a graph's lines, or of any history types. |
+| `list_ordinances` | - | Every ordinance with its state and monthly income or cost. |
+| `get_advisors` | `max_messages` (1-50) | The advisors with their current messages, and the popup message. |
+| `get_game_data` | `contains` (word or list), `limit` | The raw advisor data (`game` Lua table: coverage, grades, capacities, rates...). |
+| `read_log` | `file` (default `SC4SIM.log`), `lines` (1-1000) | The last lines of a `.log` file next to the DLL. |
+
+### Control the simulation and the city
+
 | Tool | Parameters | Description | Requires |
 |---|---|---|---|
-| `get_city_status` | - | City name, date, pause state and speed, population, funds, monthly income and expense, RCI demand. | |
-| `get_budget` | `per_building` (bool) | Funds and totals, every department with its funding percentage and line items. With `per_building=true`, every building with its budget items. | |
-| `list_buildings` | `name_contains` (string), `occupant_group` (hex string, e.g. `0x1503`), `limit` (1-2000) | Buildings with exemplar ID, city cells and monthly cost. | |
-| `read_log` | `file` (string, default `SC4SIM.log`), `lines` (1-1000) | The last lines of a `.log` file next to the DLL. | |
-| `set_speed` | `speed` (0-4) | Pause (0) or run at speed 1 (turtle) to 4 (cheetah). | `AllowControl=1` |
-| `wait_months` | `months` (1-120), `speed` (1-4), `timeout_seconds` (5-600, default 50) | Runs the simulation for N game months, then pauses and returns the city status. | `AllowControl=1` |
-| `run_cheat` | `cheat` (string) | Runs a cheat code as if typed in the Ctrl+X box. | `AllowCheats=1` |
+| `set_speed` | `speed` (0-4) | Pause (0) or run at speed 1 to 4; returns the state once the game has applied it. | `AllowControl=1` |
+| `wait_months` | `months` (1-120), `speed` (1-4), `timeout_seconds` (5-600, default 50) | Runs N game months, then pauses and returns the city status. Sends progress notifications. | `AllowControl=1` |
+| `save_city` | - | Saves the city, as Ctrl+S. | `AllowControl=1` |
+| `set_funding` | `department`, `percent` | Funding slider of a budget department. | `AllowControl=1` |
+| `set_building_funding` | `x`, `z`, `percent`, `purpose` (optional) | Local funding of one building. | `AllowControl=1` |
+| `set_tax` | `type` (`r_low`... `i_hightech`, `residential`, `commercial`, `industrial`, `all`), `rate` (0-20) | Tax rate, in 0.1 steps. | `AllowControl=1` |
+| `set_ordinance` | `ordinance` (ID or part of the name), `on` (bool) | Turns an ordinance on or off. | `AllowControl=1` |
+| `place_zone` | `zone`, `x1`, `z1`, `x2`, `z2`, `allow_demolition` (bool) | Zones or dezones (`zone=none`) a rectangle of up to 64 x 64 cells. Developed lots are refused unless `allow_demolition=true` (changing their zone demolishes them); plopped buildings are never touched. | `AllowBuild=1` |
+| `run_cheat` | `cheat` | Runs a cheat code as if typed in the Ctrl+X box. | `AllowCheats=1` |
 
-Common occupant groups for `list_buildings`: `0x1400` power, `0x1503` schools, `0x1507` health.
+Cells are `(x, z)` city cells, as `list_buildings`, `list_lots` and `query_cell` report them. Common occupant groups for
+`list_buildings`: `0x1400` power, `0x1503` schools, `0x1507` health.
+
+### Resources and prompts
+
+| Resource | Content |
+|---|---|
+| `sc4://city/status`, `sc4://city/budget`, `sc4://city/demand` | Same as `get_city_status`, `get_budget`, `get_demand`. |
+| `sc4://city/utilities`, `sc4://city/services`, `sc4://city/ordinances` | Same as `get_utilities`, `get_services`, `list_ordinances`. |
+| `sc4://log/SC4SIM.log`, `sc4://log/SC4MCP.log` | The last 200 lines of the log. |
+
+| Prompt | Arguments | What it asks the assistant |
+|---|---|---|
+| `balance_test` | `months` (default 12), `focus` | Baseline, run N months, compare budget, services, utilities and demand, report what looks unbalanced. |
+| `city_report` | - | A short report on finances, demand, services, utilities and the main problems. |
+| `find_problems` | - | The city's weak points (deficits, shortages, low coverage, abandoned buildings, crime and pollution hot spots) with fixes. |
 
 ## Requirements
 
@@ -251,15 +295,18 @@ supports stdio can use the `mcp-remote` bridge, exactly as in the Claude Desktop
 
 Web assistants call MCP servers from their own servers on the internet, so they cannot reach `127.0.0.1`: ChatGPT's
 developer mode and the custom connectors of claude.ai need a public HTTPS address. A tunnel (for example OpenAI's
-Secure MCP Tunnel, ngrok or Cloudflare Tunnel) would make SC4MCP reachable, but **SC4MCP has no authentication**:
-anyone who knows the tunnel address could pause your game or run cheats. If you do it anyway, set `AllowControl=0`
-and `AllowCheats=0`, and close the tunnel when you are done. Prefer a desktop client from the list above.
+Secure MCP Tunnel, ngrok or Cloudflare Tunnel) would make SC4MCP reachable, but **without `AuthToken` SC4MCP has no
+authentication**: anyone who knows the tunnel address could pause your game, change your taxes or run cheats. If you
+do it anyway, set a long random `AuthToken`, consider `AllowControl=0`, `AllowCheats=0` and `AllowBuild=0`, and close
+the tunnel when you are done. Prefer a desktop client from the list above.
 
 ### Long calls
 
 `wait_months` holds the call open until the months have passed (by default at most 50 seconds, up to
-`timeout_seconds`). Some clients stop waiting earlier: raise the client's tool timeout (for example
-`tool_timeout_sec` in Codex) before asking for more than 50 seconds.
+`timeout_seconds`). When the client sends a `progressToken` and accepts `text/event-stream`, SC4MCP sends a progress
+notification at every new game month and the result at the end, on the same response; clients that reset their
+timeout on progress then never cut the call. Other clients may stop waiting earlier: raise the client's tool timeout
+(for example `tool_timeout_sec` in Codex) before asking for more than 50 seconds.
 
 ## Configuration
 
@@ -269,8 +316,20 @@ and `AllowCheats=0`, and close the tunnel when you are done. Prefer a desktop cl
 |---|---|---|
 | `Enabled` | `1` | `0` turns the plugin off. |
 | `Port` | `8765` | TCP port on `127.0.0.1`. Change it if another program uses 8765. |
-| `AllowControl` | `1` | `0` removes `set_speed` and `wait_months` (read-only server). |
+| `AllowControl` | `1` | `0` removes `set_speed`, `wait_months`, `save_city`, `set_funding`, `set_building_funding`, `set_tax` and `set_ordinance`. |
 | `AllowCheats` | `1` | `0` removes `run_cheat`. |
+| `AllowBuild` | `1` | `0` removes `place_zone`. |
+| `AuthToken` | (empty) | When set, every request to `/mcp` needs `Authorization: Bearer <AuthToken>`. |
+
+With `AllowControl=0`, `AllowCheats=0` and `AllowBuild=0` the server is read-only.
+
+To use a token, add it to the client configuration as a header. For example in Cursor:
+
+```json
+{ "mcpServers": { "sc4": { "url": "http://127.0.0.1:8765/mcp", "headers": { "Authorization": "Bearer my-secret" } } } }
+```
+
+and with `mcp-remote`: `"args": ["-y", "mcp-remote", "http://127.0.0.1:8765/mcp", "--header", "Authorization: Bearer my-secret"]`.
 
 ## Example session
 
@@ -310,22 +369,32 @@ A typical balance test, as an assistant would run it:
 - **One request at a time.** While `wait_months` runs (up to `timeout_seconds`), other calls wait.
 - **Monthly values are the game's own estimates.** The department totals of the budget window update at the start
   of each game month.
+- **Education, health and water come from the advisor data.** These simulators have no interface in gzcom-dll, so
+  SC4MCP reads the `game` Lua table that the game's advisors and UI read; it is filled once a month, so a city opened
+  a moment ago may not have it yet.
+- **Tax groups are verified before use.** The budget simulator's tax group IDs are not documented: `set_tax` tries
+  the possible numberings and uses the one whose rates match the advisor data, so a wrong guess never writes a rate.
 
 | Source file | Role |
 |---|---|
 | `src/McpDllDirector.cpp` | DLL entry point (COM director): reads the INI, starts the server and the tick service. |
 | `src/HttpServer.cpp` | Minimal HTTP/1.1 server on a worker thread, origin check. |
-| `src/McpServer.cpp` | JSON-RPC 2.0 / MCP: `initialize`, `tools/list`, `tools/call`, `/health`. |
+| `src/McpServer.cpp` | JSON-RPC 2.0 / MCP: `initialize`, tools, resources, prompts, progress over server-sent events, token check, `/health`. |
 | `src/MainThreadQueue.cpp`, `src/TickService.cpp` | Hand-off of requests to the game thread. |
-| `src/Tools.cpp` | The tools. |
+| `src/Tools.cpp` | Tool registry, core tools (status, budget, speed, `wait_months`, cheats), resources and prompts. |
+| `src/ToolsRead.cpp` | Read-only tools (demand, utilities, services, cells, maps, lots, history, ordinances, advisors). |
+| `src/ToolsControl.cpp` | Funding, taxes, ordinances, saving and zoning. |
+| `src/ToolsCommon.cpp` | Helpers shared by the tool modules (game thread, buildings, advisor data). |
 | `src/McpLog.cpp` | `SC4MCP.log`. |
 
 ## Security
 
 - The server binds to `127.0.0.1` only and is never reachable from other machines.
 - Requests whose `Origin` header is not a local address are refused (protection against DNS rebinding from web pages).
-- There is no authentication: any program running on the same PC can call the server while the game is open. Set
-  `AllowControl=0` and `AllowCheats=0` for a read-only server, or `Enabled=0` when you do not need it.
+- By default there is no authentication: any program running on the same PC can call the server while the game is
+  open. Set `AuthToken` to require a bearer token, set `AllowControl=0`, `AllowCheats=0` and `AllowBuild=0` for a
+  read-only server, or `Enabled=0` when you do not need it.
+- Every change to the city (speed, funding, taxes, ordinances, zoning, saving, cheats) is written to `SC4MCP.log`.
 - `read_log` reads only `.log` files in the Plugins folder.
 
 ## Building from source
@@ -368,8 +437,28 @@ All dependencies are vendored in `vendor/`; nothing else needs to be installed.
 Issues and pull requests are welcome. Please:
 
 - keep every game call on the game thread (through `MainThreadQueue`);
-- add new tools to `src/Tools.cpp` with a JSON schema for their parameters, and document them in this README;
+- add new tools to `src/ToolsRead.cpp` or `src/ToolsControl.cpp` with a JSON schema and the right permission, and
+  document them in this README;
 - test with SimCity 4 1.1.641 and describe the test in the pull request.
+
+## Changelog
+
+### 1.1.0
+
+- New read tools: `get_demand`, `get_taxes`, `get_utilities`, `get_services`, `list_lots`, `query_cell`,
+  `get_map_stats`, `list_graphs`, `get_history`, `list_ordinances`, `get_advisors`, `get_game_data`.
+- New control tools: `save_city`, `set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `place_zone`
+  (new setting `AllowBuild`).
+- MCP resources and prompts; progress notifications for `wait_months`; optional bearer token (`AuthToken`).
+- Fixed: `set_speed` reported the speed before the change; it now waits until the game has applied it.
+- Fixed: demand values were read from index 0 for most types instead of the city totals (index 0x20000), and the
+  demand cap of every type came from a value the game maintains only for agriculture; caps now come from the advisor
+  data, and `cap_percent` is reported for I-R only.
+
+### 1.0.0
+
+- First release: `get_city_status`, `get_budget`, `list_buildings`, `read_log`, `set_speed`, `wait_months`,
+  `run_cheat`.
 
 ## License
 

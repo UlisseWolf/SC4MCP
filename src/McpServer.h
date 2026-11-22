@@ -1,8 +1,13 @@
-// SC4MCP - MCP JSON-RPC protocol (Streamable HTTP transport, no server-sent events).
+// SC4MCP - MCP JSON-RPC protocol (Streamable HTTP transport; server-sent events only for tool progress).
 #pragma once
 #include "HttpServer.h"
 
+#include <string>
+
 namespace McpServer
 {
-	HttpServer::Response HandleHttp(const std::string& method, const std::string& path, const std::string& body);
+	// Bearer token required on /mcp; empty = no authentication.
+	void Configure(const std::string& authToken);
+
+	HttpServer::Response HandleHttp(const HttpServer::Request& request, HttpServer::Stream& stream);
 }

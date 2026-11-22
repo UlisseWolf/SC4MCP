@@ -1,4 +1,4 @@
-﻿<?xml version="1.0" encoding="utf-8"?>
+<?xml version="1.0" encoding="utf-8"?>
 <Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup Label="ProjectConfigurations">
     <ProjectConfiguration Include="Release|Win32">
@@ -67,10 +67,19 @@
     <ClCompile Include="src\McpServer.cpp" />
     <ClCompile Include="src\TickService.cpp" />
     <ClCompile Include="src\Tools.cpp" />
+    <ClCompile Include="src\ToolsCommon.cpp" />
+    <ClCompile Include="src\ToolsControl.cpp" />
+    <ClCompile Include="src\ToolsRead.cpp" />
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZBaseString.cpp">
       <WarningLevel>Level3</WarningLevel>
     </ClCompile>
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZCOMDllDirector.cpp">
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZCellMap.cpp">
+      <WarningLevel>Level3</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\StringResourceManager.cpp">
       <WarningLevel>Level3</WarningLevel>
     </ClCompile>
   </ItemGroup>
@@ -81,6 +90,7 @@
     <ClInclude Include="src\McpServer.h" />
     <ClInclude Include="src\TickService.h" />
     <ClInclude Include="src\Tools.h" />
+    <ClInclude Include="src\ToolsCommon.h" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
 </Project>

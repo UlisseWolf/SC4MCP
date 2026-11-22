@@ -2,6 +2,7 @@
 //
 // One request per connection ("Connection: close"), handled on a single background thread. This is enough for an
 // MCP client on the same machine and keeps the game thread untouched: tools reach the game through MainThreadQueue.
+// A handler may answer with server-sent events (progress notifications of long tools) through HttpServer::Stream.
 #include "HttpServer.h"
 #include "McpLog.h"
 
@@ -69,6 +70,7 @@ namespace
 		case 202: return "Accepted";
 		case 204: return "No Content";
 		case 400: return "Bad Request";
+		case 401: return "Unauthorized";
 		case 403: return "Forbidden";
 		case 404: return "Not Found";
 		case 405: return "Method Not Allowed";
@@ -97,6 +99,33 @@ namespace
 		head += "Cache-Control: no-store\r\nConnection: close\r\n" + extraHeaders + "\r\n";
 		SendAll(client, head + response.body);
 	}
+
+	class SocketStream final : public HttpServer::Stream
+	{
+	public:
+		explicit SocketStream(SOCKET socket) : client(socket) {}
+
+		bool Begin() override
+		{
+			if (started) return true;
+			started = true;
+			SendAll(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+			return true;
+		}
+
+		bool Event(const std::string& data) override
+		{
+			if (!started) Begin();
+			SendAll(client, "event: message\r\ndata: " + data + "\r\n\r\n");
+			return true;
+		}
+
+		bool Started() const { return started; }
+
+	private:
+		SOCKET client;
+		bool started = false;
+	};
 
 	void Handle(SOCKET client)
 	{
@@ -156,17 +185,22 @@ namespace
 		}
 		body.resize(length);
 
+		HttpServer::Request request{ method, path, std::move(body), HeaderValue(headers, "Authorization"), HeaderValue(headers, "Accept") };
+		SocketStream stream(client);
 		HttpServer::Response response;
 		try
 		{
-			response = handler(method, path, body);
+			response = handler(request, stream);
 		}
 		catch (const std::exception& error)
 		{
 			McpLog::Write("HTTP handler error: %s", error.what());
 			response = { 500, "text/plain", "Internal error" };
 		}
-		Reply(client, response, response.status == 405 ? "Allow: POST\r\n" : "");
+		if (response.streamed || stream.Started()) return;
+		std::string extra = response.status == 405 ? "Allow: POST\r\n" : "";
+		if (response.status == 401) extra += "WWW-Authenticate: Bearer\r\n";
+		Reply(client, response, extra);
 	}
 
 	void AcceptLoop()

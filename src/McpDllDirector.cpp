@@ -11,6 +11,7 @@
 #include "cRZCOMDllDirector.h"
 
 #include <windows.h>
+#include <string>
 
 namespace
 {
@@ -22,6 +23,8 @@ namespace
 		bool enabled = true;
 		bool allowControl = true;
 		bool allowCheats = true;
+		bool allowBuild = true;
+		std::string authToken;
 	};
 
 	Settings ReadSettings()
@@ -33,6 +36,11 @@ namespace
 		settings.enabled = GetPrivateProfileIntW(L"SC4MCP", L"Enabled", 1, ini.c_str()) != 0;
 		settings.allowControl = GetPrivateProfileIntW(L"SC4MCP", L"AllowControl", 1, ini.c_str()) != 0;
 		settings.allowCheats = GetPrivateProfileIntW(L"SC4MCP", L"AllowCheats", 1, ini.c_str()) != 0;
+		settings.allowBuild = GetPrivateProfileIntW(L"SC4MCP", L"AllowBuild", 1, ini.c_str()) != 0;
+		char token[256]{};
+		GetPrivateProfileStringA("SC4MCP", "AuthToken", "", token, sizeof(token), (McpLog::DllFolder() / L"SC4MCP.ini").string().c_str());
+		settings.authToken = token;
+		while (!settings.authToken.empty() && (settings.authToken.back() == ' ' || settings.authToken.back() == '\t')) settings.authToken.pop_back();
 		return settings;
 	}
 }
@@ -46,8 +54,9 @@ public:
 	{
 		McpLog::Open();
 		settings = ReadSettings();
-		McpLog::Write("SC4MCP 1.0.0 loaded. Port=%u Enabled=%d AllowControl=%d AllowCheats=%d",
-			settings.port, settings.enabled, settings.allowControl, settings.allowCheats);
+		McpLog::Write("SC4MCP 1.1.0 loaded. Port=%u Enabled=%d AllowControl=%d AllowCheats=%d AllowBuild=%d AuthToken=%s",
+			settings.port, settings.enabled, settings.allowControl, settings.allowCheats, settings.allowBuild,
+			settings.authToken.empty() ? "off" : "on");
 		framework = pCOM->FrameWork();
 		if (framework->GetState() < cIGZFrameWork::kStatePreAppInit) framework->AddHook(this);
 		else PostAppInit();
@@ -61,7 +70,8 @@ public:
 			McpLog::Write("Disabled in SC4MCP.ini (Enabled=0).");
 			return true;
 		}
-		Tools::Configure(settings.allowControl, settings.allowCheats);
+		Tools::Configure(settings.allowControl, settings.allowCheats, settings.allowBuild);
+		McpServer::Configure(settings.authToken);
 		if (!tick.Register(framework))
 		{
 			McpLog::Write("Tick service registration failed: the MCP server is not started.");

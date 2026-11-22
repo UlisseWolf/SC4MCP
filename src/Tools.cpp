@@ -1,223 +1,97 @@
-// SC4MCP - MCP tools.
+// SC4MCP - MCP tools: registry, the core tools, resources and prompts.
 //
-// Every tool that reads or changes the city runs on the game thread through MainThreadQueue. wait_months is the only
-// tool that waits on the HTTP thread: it lets the simulation run and polls the date.
+// Every tool that reads or changes the city runs on the game thread through MainThreadQueue (ToolsCommon::OnGameThread).
+// wait_months and set_speed also wait on the HTTP thread: the game applies a speed change on its next frames, so the
+// tool reads the result back afterwards. The other tools are in ToolsRead.cpp (read-only) and ToolsControl.cpp.
 #include "Tools.h"
-#include "MainThreadQueue.h"
+#include "ToolsCommon.h"
 #include "McpLog.h"
 
 #include "cIGZCheatCodeManager.h"
-#include "cIGZString.h"
 #include "cISC4App.h"
 #include "cISC4BudgetSimulator.h"
-#include "cISC4BuildingOccupant.h"
 #include "cISC4City.h"
 #include "cISC4Demand.h"
 #include "cISC4DemandSimulator.h"
 #include "cISC4DepartmentBudget.h"
 #include "cISC4LineItem.h"
 #include "cISC4Occupant.h"
-#include "cISC4OccupantFilter.h"
-#include "cISC4OccupantManager.h"
 #include "cISC4ResidentialSimulator.h"
 #include "cISC4Simulator.h"
-#include "cISCPropertyHolder.h"
-#include "cRZAutoRefCount.h"
 #include "cRZBaseString.h"
 #include "GZServPtrs.h"
 #include "SC4Percentage.h"
-#include "SC4Rect.h"
-#include "SC4Vector.h"
 
-#include <windows.h>
 #include <algorithm>
-#include <cctype>
 #include <chrono>
-#include <cstdio>
 #include <fstream>
 #include <map>
-#include <set>
 #include <thread>
-#include <unordered_set>
-#include <vector>
 
 using nlohmann::json;
+using namespace ToolsCommon;
 
 namespace
 {
 	bool controlAllowed = true;
 	bool cheatsAllowed = true;
+	bool buildAllowed = true;
 
-	constexpr uint32_t kOccupantTypeBuilding = 0x278128A0;
-
-	std::string Hex(uint32_t value)
+	bool Allowed(Permission permission)
 	{
-		char text[16];
-		std::snprintf(text, sizeof(text), "0x%08X", value);
-		return text;
-	}
-
-	std::string Lower(std::string text)
-	{
-		std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-		return text;
-	}
-
-	cISC4City* City()
-	{
-		cISC4AppPtr app;
-		return app ? app->GetCity() : nullptr;
-	}
-
-	json NoCity()
-	{
-		return json{ {"city_loaded", false}, {"message", "No city is open: open a city in SimCity 4 first."} };
-	}
-
-	// Runs work on the game thread and parses its JSON result.
-	json OnGameThread(const std::function<json()>& work, bool& isError)
-	{
-		std::string text;
-		const bool ran = MainThreadQueue::Run([&]() -> std::string { return work().dump(); }, text);
-		if (!ran)
+		switch (permission)
 		{
-			isError = true;
-			return json{ {"error", "The game did not answer in time (loading, minimized or a dialog is open)."} };
+		case Permission::Control: return controlAllowed;
+		case Permission::Cheats: return cheatsAllowed;
+		case Permission::Build: return buildAllowed;
+		default: return true;
 		}
-		json result = json::parse(text, nullptr, false);
-		if (result.is_discarded())
-		{
-			isError = true;
-			return json{ {"error", "Invalid result from the game thread."} };
-		}
-		if (result.contains("error")) isError = true;
-		return result;
 	}
 
-	// ------------------------------------------------------------------------------------------------- readers
-
-	json DateOf(cISC4Simulator* simulator)
+	const std::vector<ToolDef>& Registry()
 	{
-		uint32_t year = 0, month = 0, day = 0, dayOfYear = 0, weekDay = 0;
-		simulator->GetSimDate(&year, &month, &day, &dayOfYear, &weekDay);
-		char text[32];
-		std::snprintf(text, sizeof(text), "%04u-%02u-%02u", year, month, day);
-		return json{ {"year", year}, {"month", month}, {"day", day}, {"text", text}, {"day_number", simulator->GetSimDateNumber()} };
+		static const std::vector<ToolDef> tools = []
+		{
+			std::vector<ToolDef> all;
+			AddCoreTools(all);
+			AddReadTools(all);
+			AddControlTools(all);
+			return all;
+		}();
+		return tools;
 	}
 
-	json DemandOf(cISC4City* city)
+	// ------------------------------------------------------------------------------------------------- demand
+
+	struct DemandType { uint32_t id; const char* label; };
+	constexpr DemandType kDemands[] = {
+		{0x1010, "R$"}, {0x1020, "R$$"}, {0x1030, "R$$$"},
+		{0x3110, "Cs$"}, {0x3120, "Cs$$"}, {0x3130, "Cs$$$"}, {0x3320, "Co$$"}, {0x3330, "Co$$$"},
+		{0x4100, "I-R"}, {0x4200, "I-D"}, {0x4300, "I-M"}, {0x4400, "I-HT"} };
+
+	// The demand simulator keeps the city totals under index 0x20000 (the index the game's own demand UI reads);
+	// older SC4MCP versions read index 0 for most types, which is not the total.
+	constexpr uint32_t kTotalsIndex = 0x20000;
+
+	const cISC4Demand* TotalDemand(cISC4DemandSimulator* simulator, uint32_t id)
+	{
+		const cISC4Demand* demand = simulator->GetDemand(id, kTotalsIndex);
+		return demand ? demand : simulator->GetDemand(id, 0);
+	}
+
+	json DemandSummary(cISC4City* city)
 	{
 		json out = json::object();
-		cISC4DemandSimulator* demand = city->GetDemandSimulator();
-		if (!demand) return out;
-		static const std::pair<uint32_t, const char*> kDemands[] = {
-			{0x1010, "R$"}, {0x1020, "R$$"}, {0x1030, "R$$$"},
-			{0x3110, "Cs$"}, {0x3120, "Cs$$"}, {0x3130, "Cs$$$"}, {0x3320, "Co$$"}, {0x3330, "Co$$$"},
-			{0x4100, "I-R"}, {0x4200, "I-D"}, {0x4300, "I-M"}, {0x4400, "I-HT"} };
-		for (const auto& [id, label] : kDemands)
+		cISC4DemandSimulator* simulator = city->GetDemandSimulator();
+		if (!simulator) return out;
+		for (const auto& type : kDemands)
 		{
-			// SC4 keeps the I-M and I-HT demand under index 0x20000; the others under 0.
-			const uint32_t index = (id == 0x4300 || id == 0x4400) ? 0x20000 : 0;
-			const cISC4Demand* d = demand->GetDemand(id, index);
-			if (!d) continue;
-			const SC4Percentage* cap = d->GetDemandCap();
-			out[label] = json{ {"id", Hex(id)}, {"demand", d->QueryDemandValue()}, {"supply", d->QuerySupplyValue()},
-				{"active_demand", d->QueryActiveDemandValue()}, {"cap", cap ? cap->percentage : 0.0f} };
+			if (const cISC4Demand* demand = TotalDemand(simulator, type.id)) out[type.label] = demand->QueryDemandValue();
 		}
 		return out;
 	}
 
-	class BuildingFilter final : public cISC4OccupantFilter
-	{
-	public:
-		bool QueryInterface(uint32_t riid, void** ppvObj) override
-		{
-			if (riid == GZIID_cISC4OccupantFilter || riid == GZIID_cIGZUnknown)
-			{
-				*ppvObj = static_cast<cISC4OccupantFilter*>(this);
-				AddRef();
-				return true;
-			}
-			return false;
-		}
-		uint32_t AddRef() override { return ++refCount; }
-		uint32_t Release() override { return refCount > 0 ? --refCount : 0; }
-		bool IsOccupantIncluded(cISC4Occupant* occupant) override { return occupant && occupant->GetType() == static_cast<int32_t>(kOccupantTypeBuilding); }
-		bool IsOccupantTypeIncluded(uint32_t type) override { return type == kOccupantTypeBuilding; }
-		bool IsPropertyHolderIncluded(cISCPropertyHolder*) override { return true; }
-	private:
-		uint32_t refCount = 1;
-	};
-
-	struct Collected
-	{
-		std::unordered_set<cISC4Occupant*> seen;
-		std::vector<cISC4Occupant*> buildings;
-	};
-
-	bool Collect(cISC4Occupant* occupant, void* data)
-	{
-		auto& collected = *static_cast<Collected*>(data);
-		if (collected.seen.insert(occupant).second) collected.buildings.push_back(occupant);
-		return true;
-	}
-
-	std::vector<cISC4Occupant*> AllBuildings(cISC4City* city)
-	{
-		Collected collected;
-		cISC4OccupantManager* occupants = city->GetOccupantManager();
-		if (!occupants) return {};
-		BuildingFilter filter;
-		occupants->IterateOccupants(Collect, &collected, nullptr, nullptr, &filter);
-		return collected.buildings;
-	}
-
-	std::string BuildingName(cISC4Occupant* occupant)
-	{
-		cRZAutoRefCount<cISC4BuildingOccupant> building;
-		if (!occupant->QueryInterface(GZIID_cISC4BuildingOccupant, building.AsPPVoid())) return {};
-		cRZBaseString name;
-		if (building->GetName(name) && name.Strlen() > 0) return name.ToChar();
-		if (cIGZString* exemplarName = building->GetExemplarName()) return exemplarName->ToChar();
-		return {};
-	}
-
-	uint32_t BuildingType(cISC4Occupant* occupant)
-	{
-		cRZAutoRefCount<cISC4BuildingOccupant> building;
-		if (!occupant->QueryInterface(GZIID_cISC4BuildingOccupant, building.AsPPVoid())) return 0;
-		return building->GetBuildingType();
-	}
-
-	struct BuildingCost
-	{
-		int64_t monthly = 0;
-		std::vector<cISC4BudgetSimulator::BudgetItem> items;
-	};
-
-	BuildingCost CostOf(cISC4BudgetSimulator* budget, cISC4Occupant* occupant)
-	{
-		BuildingCost cost;
-		cISCPropertyHolder* holder = occupant->AsPropertyHolder();
-		if (!budget || !holder) return cost;
-		SC4Vector<cISC4BudgetSimulator::BudgetItem> items;
-		if (!budget->GetBudgetItemInfo(holder, items)) return cost;
-		for (const auto& item : items)
-		{
-			cost.items.push_back(item);
-			cost.monthly += item.cost;
-		}
-		return cost;
-	}
-
-	std::string DepartmentName(cISC4DepartmentBudget* department)
-	{
-		cRZBaseString name;
-		if (department && department->GetDepartmentName(name) && name.Strlen() > 0) return name.ToChar();
-		return {};
-	}
-
-	// ------------------------------------------------------------------------------------------------- tools
+	// ------------------------------------------------------------------------------------------------- core tools
 
 	json GetCityStatus()
 	{
@@ -227,6 +101,7 @@ namespace
 		cRZBaseString name;
 		city->GetCityName(name);
 		out["name"] = name.ToChar();
+		out["size_cells"] = json{ {"x", city->CellCountX()}, {"z", city->CellCountZ()} };
 		if (cISC4Simulator* simulator = city->GetSimulator())
 		{
 			out["date"] = DateOf(simulator);
@@ -246,7 +121,7 @@ namespace
 			out["tax_income_ytd"] = budget->GetTaxIncome();
 			out["borrowed"] = budget->GetTotalBorrowed();
 		}
-		out["demand"] = DemandOf(city);
+		out["demand"] = DemandSummary(city);
 		return out;
 	}
 
@@ -255,13 +130,14 @@ namespace
 		cISC4City* city = City();
 		if (!city) return NoCity();
 		cISC4BudgetSimulator* budget = city->GetBudgetSimulator();
-		if (!budget) return json{ {"error", "Budget simulator unavailable."} };
+		if (!budget) return Error("Budget simulator unavailable.");
 
 		json out{ {"funds", budget->GetTotalFunds()}, {"monthly_income", budget->GetTotalMonthlyIncome()},
 			{"monthly_expense", budget->GetTotalMonthlyExpense()}, {"tax_income_ytd", budget->GetTaxIncome()},
 			{"income_ytd", budget->GetYTDIncome()}, {"expenses_ytd", budget->GetYTDExpenses()},
 			{"estimated_income", budget->GetEstIncome()}, {"estimated_expenses", budget->GetEstExpenses()},
-			{"loan_payments_monthly", budget->GetTotalMonthlyBondPayments()} };
+			{"loan_payments_monthly", budget->GetTotalMonthlyBondPayments()}, {"borrowed", budget->GetTotalBorrowed()},
+			{"borrowing_limit", budget->GetCurrentBorrowingLimit()} };
 		if (cISC4ResidentialSimulator* residential = city->GetResidentialSimulator()) out["population"] = residential->GetPopulation();
 
 		// Departments and line items, found through the budget items of the buildings in the city.
@@ -274,7 +150,7 @@ namespace
 			if (cost.items.empty()) continue;
 			for (const auto& item : cost.items)
 			{
-				Line& line = lines[item.departmentID][item.lineItem];
+				Line& line = lines[item.department][item.line];
 				line.buildingCost += item.cost;
 				++line.count;
 			}
@@ -283,11 +159,11 @@ namespace
 				json items = json::array();
 				for (const auto& item : cost.items)
 				{
-					items.push_back(json{ {"department", Hex(item.departmentID)}, {"line", Hex(item.lineItem)},
-						{"purpose", Hex(item.purpose)}, {"cost", item.cost}, {"local_funding", item.localFundingPercentage} });
+					items.push_back(json{ {"department", Hex(item.department)}, {"line", Hex(item.line)},
+						{"purpose", Hex(item.purpose)}, {"cost", item.cost}, {"local_funding", item.localFunding} });
 				}
 				buildings.push_back(json{ {"name", BuildingName(occupant)}, {"exemplar", Hex(BuildingType(occupant))},
-					{"monthly_cost", cost.monthly}, {"items", items} });
+					{"cells", BuildingCells(occupant)}, {"monthly_cost", cost.monthly}, {"items", items} });
 			}
 		}
 
@@ -301,6 +177,8 @@ namespace
 				d["name"] = DepartmentName(department);
 				const SC4Percentage* funding = department->GetFundingPercentage();
 				d["funding_percent"] = funding ? funding->percentage * 100.0f : 0.0f;
+				const SC4Percentage* maximum = department->GetMaxAllowedFundingPercentage();
+				if (maximum) d["max_funding_percent"] = maximum->percentage * 100.0f;
 				d["total_expenses"] = department->GetTotalExpenses();
 				d["total_income"] = department->GetTotalIncome();
 				d["ideal_monthly_funding"] = department->GetIdealMonthlyFunding();
@@ -343,12 +221,7 @@ namespace
 			if (!needle.empty() && Lower(name).find(needle) == std::string::npos) continue;
 			++total;
 			if (list.size() >= limit) continue;
-			json b{ {"name", name}, {"exemplar", Hex(BuildingType(occupant))} };
-			SC4Rect<long> cells{};
-			if (occupant->GetBoundingCityCells(cells))
-			{
-				b["cells"] = json{ {"x1", cells.topLeftX}, {"z1", cells.topLeftY}, {"x2", cells.bottomRightX}, {"z2", cells.bottomRightY} };
-			}
+			json b{ {"name", name}, {"exemplar", Hex(BuildingType(occupant))}, {"cells", BuildingCells(occupant)} };
 			const BuildingCost cost = CostOf(budget, occupant);
 			if (!cost.items.empty()) b["monthly_cost"] = cost.monthly;
 			list.push_back(b);
@@ -356,35 +229,71 @@ namespace
 		return json{ {"total", total}, {"returned", list.size()}, {"buildings", list} };
 	}
 
-	json SetSpeed(int speed)
+	// Asks the simulator for a speed; the game applies it on its next frames.
+	json RequestSpeed(int speed)
 	{
 		cISC4City* city = City();
 		if (!city) return NoCity();
 		cISC4Simulator* simulator = city->GetSimulator();
-		if (!simulator) return json{ {"error", "Simulator unavailable."} };
+		if (!simulator) return Error("Simulator unavailable.");
 		if (speed <= 0)
 		{
 			if (!simulator->IsPaused()) simulator->Pause();
 		}
 		else
 		{
-			if (simulator->IsPaused()) simulator->Resume();
 			simulator->SetSimSpeed(std::clamp(speed, 1, 4));
+			if (simulator->IsPaused()) simulator->Resume();
 		}
+		return json{ {"requested", true} };
+	}
+
+	json SpeedState()
+	{
+		cISC4City* city = City();
+		if (!city || !city->GetSimulator()) return NoCity();
+		cISC4Simulator* simulator = city->GetSimulator();
 		return json{ {"paused", simulator->IsPaused()}, {"speed", simulator->GetSimSpeed()}, {"date", DateOf(simulator)} };
+	}
+
+	// Sets the speed and reads it back once the game has applied it (it reported the old speed before 1.1.0).
+	json SetSpeed(int speed, bool& isError)
+	{
+		json state;
+		for (int attempt = 0; attempt < 2; ++attempt)
+		{
+			json request = OnGameThread([speed] { return RequestSpeed(speed); }, isError);
+			if (isError) return request;
+			for (int wait = 0; wait < 10; ++wait)
+			{
+				std::this_thread::sleep_for(std::chrono::milliseconds(100));
+				bool readError = false;
+				state = OnGameThread(SpeedState, readError);
+				if (readError) continue;
+				const bool paused = state.value("paused", false);
+				const bool applied = speed <= 0 ? paused : (!paused && state.value("speed", -1) == speed);
+				if (applied)
+				{
+					state["requested_speed"] = speed;
+					state["applied"] = true;
+					return state;
+				}
+			}
+		}
+		state["requested_speed"] = speed;
+		state["applied"] = false;
+		state["note"] = "The game did not apply the speed within 2 seconds (a dialog or the game's own pause may hold it).";
+		return state;
 	}
 
 	json RunCheat(const std::string& text)
 	{
 		cISC4AppPtr app;
 		cIGZCheatCodeManager* cheats = app ? app->GetCheatCodeManager() : nullptr;
-		if (!cheats) return json{ {"error", "Cheat code manager unavailable."} };
+		if (!cheats) return Error("Cheat code manager unavailable.");
 		cRZBaseString line(text.c_str());
 		uint32_t id = 0;
-		if (!cheats->DoesCheatCodeMatch(line, id))
-		{
-			return json{ {"error", "Unknown cheat: " + text} };
-		}
+		if (!cheats->DoesCheatCodeMatch(line, id)) return Error("Unknown cheat: " + text);
 		const bool sent = cheats->SendCheatNotifications(line, id);
 		McpLog::Write("run_cheat: %s (0x%08X) %s", text.c_str(), id, sent ? "sent" : "not sent");
 		return json{ {"cheat", text}, {"id", Hex(id)}, {"sent", sent} };
@@ -393,7 +302,7 @@ namespace
 	json ReadLogTail(const std::string& fileName, size_t lines)
 	{
 		std::ifstream file(McpLog::DllFolder() / fileName);
-		if (!file) return json{ {"error", "Log file not found next to SC4MCP.dll."} };
+		if (!file) return Error("Log file not found next to SC4MCP.dll.");
 		std::vector<std::string> all;
 		std::string line;
 		while (std::getline(file, line)) all.push_back(line);
@@ -403,142 +312,276 @@ namespace
 		return json{ {"file", fileName}, {"total_lines", all.size()}, {"lines", out} };
 	}
 
-	// Lets the simulation run until `months` months have passed (or `timeout_seconds`), then pauses it.
-	json WaitMonths(int months, int speed, int timeoutSeconds, bool& isError)
+	int MonthIndex(const json& date) { return date["year"].get<int>() * 12 + date["month"].get<int>(); }
+
+	// Lets the simulation run until `months` months have passed (or `timeout_seconds`), then pauses it. Sends a
+	// progress notification at every new month when the client asked for progress.
+	json WaitMonths(int months, int speed, int timeoutSeconds, bool& isError, const Tools::Progress& progress)
 	{
 		json start = OnGameThread([&]() -> json
 		{
 			cISC4City* city = City();
 			if (!city || !city->GetSimulator()) return NoCity();
-			json date = DateOf(city->GetSimulator());
-			SetSpeed(speed);
-			return date;
+			return DateOf(city->GetSimulator());
 		}, isError);
 		if (isError || !start.contains("year")) return start;
-		const int startIndex = start["year"].get<int>() * 12 + start["month"].get<int>();
+		bool speedError = false;
+		SetSpeed(speed, speedError);
+
+		const int startIndex = MonthIndex(start);
 		const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(timeoutSeconds);
 		json now = start;
+		int reported = 0;
+		if (progress) progress(0, months, "Started at " + start["text"].get<std::string>());
 		while (std::chrono::steady_clock::now() < deadline)
 		{
 			std::this_thread::sleep_for(std::chrono::milliseconds(500));
 			bool pollError = false;
-			now = OnGameThread([&]() -> json
+			json date = OnGameThread([&]() -> json
 			{
 				cISC4City* city = City();
 				if (!city || !city->GetSimulator()) return NoCity();
 				return DateOf(city->GetSimulator());
 			}, pollError);
-			if (pollError || !now.contains("year")) continue;
-			if (now["year"].get<int>() * 12 + now["month"].get<int>() - startIndex >= months) break;
+			if (pollError || !date.contains("year")) continue;
+			now = date;
+			const int passed = MonthIndex(now) - startIndex;
+			if (progress && passed > reported)
+			{
+				reported = passed;
+				progress(std::min(passed, months), months, "Reached " + now["text"].get<std::string>());
+			}
+			if (passed >= months) break;
 		}
 		bool stopError = false;
-		json status = OnGameThread([&]() -> json { SetSpeed(0); return GetCityStatus(); }, stopError);
-		const bool reached = now.contains("year") && now["year"].get<int>() * 12 + now["month"].get<int>() - startIndex >= months;
-		return json{ {"start_date", start}, {"months_requested", months}, {"reached", reached}, {"status", status} };
-	}
-
-	json Schema(json properties, json required = json::array())
-	{
-		return json{ {"type", "object"}, {"properties", std::move(properties)}, {"required", std::move(required)} };
+		SetSpeed(0, stopError);
+		json status = OnGameThread(GetCityStatus, stopError);
+		const bool reached = now.contains("year") && MonthIndex(now) - startIndex >= months;
+		return json{ {"start_date", start}, {"months_requested", months}, {"months_passed", now.contains("year") ? MonthIndex(now) - startIndex : 0},
+			{"reached", reached}, {"status", status} };
 	}
 }
 
-void Tools::Configure(bool allowControl, bool allowCheats)
+namespace ToolsCommon
+{
+	void AddCoreTools(std::vector<ToolDef>& tools)
+	{
+		tools.push_back({ "get_city_status",
+			"Current city: name, size, date, pause state and speed, population, funds, monthly income/expense and the RCI demand of each type (city totals). get_demand gives the details.",
+			Schema(json::object()), Permission::Read,
+			GameThread([](const json&) { return GetCityStatus(); }) });
+
+		tools.push_back({ "get_budget",
+			"Budget of the open city: totals, loans, every department with its funding percentage and line items (expenses as the game holds them and as the sum of the current costs of the buildings). per_building=true adds every building with its cells and budget items.",
+			Schema({ {"per_building", {{"type", "boolean"}, {"description", "Include every building with its budget items."}}} }), Permission::Read,
+			GameThread([](const json& arguments) { return GetBudget(arguments.value("per_building", false)); }) });
+
+		tools.push_back({ "list_buildings",
+			"Buildings in the city with exemplar ID, city cells and monthly cost. Filter by name substring and/or occupant group (e.g. 0x1503 schools, 0x1507 health, 0x1400 power).",
+			Schema({ {"name_contains", {{"type", "string"}}}, {"occupant_group", {{"type", "string"}, {"description", "Hex occupant group, e.g. 0x1503."}}},
+				{"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 2000}}} }), Permission::Read,
+			GameThread([](const json& arguments)
+			{
+				const std::string filter = arguments.value("name_contains", std::string());
+				const uint32_t group = arguments.contains("occupant_group") ? ParseId(arguments["occupant_group"]) : 0;
+				const size_t limit = static_cast<size_t>(std::clamp(arguments.value("limit", 200), 1, 2000));
+				return ListBuildings(filter, group, limit);
+			}) });
+
+		tools.push_back({ "read_log",
+			"Last lines of a log file next to the DLL: SC4SIM.log (default), SC4MCP.log or another *.log in the Plugins folder.",
+			Schema({ {"file", {{"type", "string"}}}, {"lines", {{"type", "integer"}, {"minimum", 1}, {"maximum", 1000}}} }), Permission::Read,
+			[](const json& arguments, bool& isError, const Tools::Progress&) -> json
+			{
+				const std::string file = arguments.value("file", std::string("SC4SIM.log"));
+				if (file.find_first_of("/\\:") != std::string::npos || file.size() < 5 || Lower(file.substr(file.size() - 4)) != ".log")
+				{
+					isError = true;
+					return Error("file must be the name of a .log file in the Plugins folder.");
+				}
+				const size_t lines = static_cast<size_t>(std::clamp(arguments.value("lines", 100), 1, 1000));
+				json out = ReadLogTail(file, lines);
+				if (out.contains("error")) isError = true;
+				return out;
+			} });
+
+		tools.push_back({ "set_speed",
+			"Pause (0) or run the simulation at speed 1 (turtle) to 4 (cheetah). Returns the state after the game has applied it.",
+			Schema({ {"speed", {{"type", "integer"}, {"minimum", 0}, {"maximum", 4}}} }, json::array({ "speed" })), Permission::Control,
+			[](const json& arguments, bool& isError, const Tools::Progress&) -> json
+			{
+				return SetSpeed(std::clamp(arguments.at("speed").get<int>(), 0, 4), isError);
+			} });
+
+		tools.push_back({ "wait_months",
+			"Runs the simulation for the given number of game months (at speed 1-4), then pauses and returns the city status. Waits at most timeout_seconds (default 50) of real time. Sends progress notifications when the client asks for them.",
+			Schema({ {"months", {{"type", "integer"}, {"minimum", 1}, {"maximum", 120}}}, {"speed", {{"type", "integer"}, {"minimum", 1}, {"maximum", 4}}},
+				{"timeout_seconds", {{"type", "integer"}, {"minimum", 5}, {"maximum", 600}}} }, json::array({ "months" })), Permission::Control,
+			[](const json& arguments, bool& isError, const Tools::Progress& progress) -> json
+			{
+				const int months = std::clamp(arguments.at("months").get<int>(), 1, 120);
+				const int speed = std::clamp(arguments.value("speed", 4), 1, 4);
+				const int timeout = std::clamp(arguments.value("timeout_seconds", 50), 5, 600);
+				return WaitMonths(months, speed, timeout, isError, progress);
+			} });
+
+		tools.push_back({ "run_cheat",
+			"Runs a cheat code as if typed in the Ctrl+X box, including the cheats of DLL plugins (e.g. FundingReset, ScanPumps, IMZoneConvert, RemovePhantomBudgetItems Health).",
+			Schema({ {"cheat", {{"type", "string"}}} }, json::array({ "cheat" })), Permission::Cheats,
+			GameThread([](const json& arguments) { return RunCheat(arguments.at("cheat").get<std::string>()); }) });
+	}
+}
+
+// ===================================================================================================== Tools API
+
+void Tools::Configure(bool allowControl, bool allowCheats, bool allowBuild)
 {
 	controlAllowed = allowControl;
 	cheatsAllowed = allowCheats;
+	buildAllowed = allowBuild;
 }
 
 json Tools::List()
 {
-	json tools = json::array();
-	tools.push_back({ {"name", "get_city_status"},
-		{"description", "Current city: name, date, pause state and speed, population, funds, monthly income/expense and the RCI demand values."},
-		{"inputSchema", Schema(json::object())} });
-	tools.push_back({ {"name", "get_budget"},
-		{"description", "Budget of the open city: totals, every department with its funding percentage and line items (expenses as the game holds them and as the sum of the current costs of the buildings). per_building=true adds every building with its budget items."},
-		{"inputSchema", Schema({ {"per_building", {{"type", "boolean"}, {"description", "Include every building with its budget items."}}} })} });
-	tools.push_back({ {"name", "list_buildings"},
-		{"description", "Buildings in the city with exemplar ID, city cells and monthly cost. Filter by name substring and/or occupant group (e.g. 0x1503 schools, 0x1507 health, 0x1400 power)."},
-		{"inputSchema", Schema({ {"name_contains", {{"type", "string"}}}, {"occupant_group", {{"type", "string"}, {"description", "Hex occupant group, e.g. 0x1503."}}},
-			{"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 2000}}} })} });
-	tools.push_back({ {"name", "read_log"},
-		{"description", "Last lines of a log file next to the DLL: SC4SIM.log (default), SC4MCP.log or another *.log in the Plugins folder."},
-		{"inputSchema", Schema({ {"file", {{"type", "string"}}}, {"lines", {{"type", "integer"}, {"minimum", 1}, {"maximum", 1000}}} })} });
-	if (controlAllowed)
+	json list = json::array();
+	for (const ToolDef& tool : Registry())
 	{
-		tools.push_back({ {"name", "set_speed"},
-			{"description", "Pause (0) or run the simulation at speed 1 (turtle) to 4 (cheetah)."},
-			{"inputSchema", Schema({ {"speed", {{"type", "integer"}, {"minimum", 0}, {"maximum", 4}}} }, json::array({ "speed" }))} });
-		tools.push_back({ {"name", "wait_months"},
-			{"description", "Runs the simulation for the given number of game months (at speed 1-4), then pauses and returns the city status. Waits at most timeout_seconds (default 50) of real time."},
-			{"inputSchema", Schema({ {"months", {{"type", "integer"}, {"minimum", 1}, {"maximum", 120}}}, {"speed", {{"type", "integer"}, {"minimum", 1}, {"maximum", 4}}},
-				{"timeout_seconds", {{"type", "integer"}, {"minimum", 5}, {"maximum", 600}}} }, json::array({ "months" }))} });
+		if (!Allowed(tool.permission)) continue;
+		json entry{ {"name", tool.name}, {"description", tool.description}, {"inputSchema", tool.inputSchema} };
+		const bool readOnly = tool.permission == Permission::Read;
+		entry["annotations"] = json{ {"readOnlyHint", readOnly}, {"destructiveHint", tool.permission == Permission::Build},
+			{"openWorldHint", false} };
+		list.push_back(entry);
 	}
-	if (cheatsAllowed)
-	{
-		tools.push_back({ {"name", "run_cheat"},
-			{"description", "Runs a cheat code as if typed in the Ctrl+X box, including the cheats of DLL plugins (e.g. FundingReset, ScanPumps, IMZoneConvert, RemovePhantomBudgetItems Health)."},
-			{"inputSchema", Schema({ {"cheat", {{"type", "string"}}} }, json::array({ "cheat" }))} });
-	}
-	return tools;
+	return list;
 }
 
-json Tools::Call(const std::string& name, const json& arguments, bool& isError)
+json Tools::Call(const std::string& name, const json& arguments, bool& isError, const Progress& progress)
 {
 	isError = false;
-	try
+	for (const ToolDef& tool : Registry())
 	{
-		if (name == "get_city_status") return OnGameThread(GetCityStatus, isError);
-		if (name == "get_budget")
+		if (tool.name != name) continue;
+		if (!Allowed(tool.permission))
 		{
-			const bool perBuilding = arguments.value("per_building", false);
-			return OnGameThread([perBuilding] { return GetBudget(perBuilding); }, isError);
+			isError = true;
+			return Error("Tool " + name + " is turned off in SC4MCP.ini.");
 		}
-		if (name == "list_buildings")
+		try
 		{
-			const std::string filter = arguments.value("name_contains", std::string());
-			const std::string groupText = arguments.value("occupant_group", std::string());
-			const uint32_t group = groupText.empty() ? 0 : static_cast<uint32_t>(std::stoul(groupText, nullptr, 0));
-			const size_t limit = static_cast<size_t>(std::clamp(arguments.value("limit", 200), 1, 2000));
-			return OnGameThread([=] { return ListBuildings(filter, group, limit); }, isError);
+			return tool.run(arguments, isError, progress);
 		}
-		if (name == "read_log")
+		catch (const std::exception& error)
 		{
-			std::string file = arguments.value("file", std::string("SC4SIM.log"));
-			if (file.find_first_of("/\\:") != std::string::npos || file.size() < 5 || Lower(file.substr(file.size() - 4)) != ".log")
-			{
-				isError = true;
-				return json{ {"error", "file must be the name of a .log file in the Plugins folder."} };
-			}
-			const size_t lines = static_cast<size_t>(std::clamp(arguments.value("lines", 100), 1, 1000));
-			json out = ReadLogTail(file, lines);
-			if (out.contains("error")) isError = true;
-			return out;
+			isError = true;
+			return Error(std::string("Invalid arguments: ") + error.what());
 		}
-		if (controlAllowed && name == "set_speed")
-		{
-			const int speed = arguments.at("speed").get<int>();
-			return OnGameThread([speed] { return SetSpeed(speed); }, isError);
-		}
-		if (controlAllowed && name == "wait_months")
-		{
-			const int months = std::clamp(arguments.at("months").get<int>(), 1, 120);
-			const int speed = std::clamp(arguments.value("speed", 4), 1, 4);
-			const int timeout = std::clamp(arguments.value("timeout_seconds", 50), 5, 600);
-			return WaitMonths(months, speed, timeout, isError);
-		}
-		if (cheatsAllowed && name == "run_cheat")
-		{
-			const std::string cheat = arguments.at("cheat").get<std::string>();
-			return OnGameThread([cheat] { return RunCheat(cheat); }, isError);
-		}
-	}
-	catch (const std::exception& error)
-	{
-		isError = true;
-		return json{ {"error", std::string("Invalid arguments: ") + error.what()} };
 	}
 	isError = true;
-	return json{ {"error", "Unknown tool: " + name} };
+	return Error("Unknown tool: " + name);
+}
+
+// ------------------------------------------------------------------------------------------------- resources
+
+namespace
+{
+	struct ResourceDef { const char* uri; const char* name; const char* description; const char* tool; json arguments; };
+
+	const std::vector<ResourceDef>& Resources()
+	{
+		static const std::vector<ResourceDef> resources = {
+			{ "sc4://city/status", "City status", "Name, date, speed, population, funds and RCI demand of the open city.", "get_city_status", json::object() },
+			{ "sc4://city/budget", "Budget", "Departments, line items and totals of the city budget.", "get_budget", json::object() },
+			{ "sc4://city/demand", "Demand", "RCI demand of every type, with supply and caps.", "get_demand", json::object() },
+			{ "sc4://city/utilities", "Utilities", "Power, water and garbage: production, consumption and plants.", "get_utilities", json::object() },
+			{ "sc4://city/services", "Services", "Education, health, police, jails and fire coverage and capacity.", "get_services", json::object() },
+			{ "sc4://city/ordinances", "Ordinances", "Every ordinance with its state and monthly income or cost.", "list_ordinances", json::object() },
+			{ "sc4://log/SC4SIM.log", "SC4SIM.log", "The last 200 lines of SC4SIM.log.", "read_log", json{ {"file", "SC4SIM.log"}, {"lines", 200} } },
+			{ "sc4://log/SC4MCP.log", "SC4MCP.log", "The last 200 lines of SC4MCP.log.", "read_log", json{ {"file", "SC4MCP.log"}, {"lines", 200} } },
+		};
+		return resources;
+	}
+}
+
+json Tools::ListResources()
+{
+	json list = json::array();
+	for (const ResourceDef& resource : Resources())
+	{
+		list.push_back(json{ {"uri", resource.uri}, {"name", resource.name}, {"description", resource.description}, {"mimeType", "application/json"} });
+	}
+	return list;
+}
+
+json Tools::ReadResource(const std::string& uri)
+{
+	for (const ResourceDef& resource : Resources())
+	{
+		if (uri != resource.uri) continue;
+		bool isError = false;
+		json data = Call(resource.tool, resource.arguments, isError);
+		return json::array({ json{ {"uri", uri}, {"mimeType", "application/json"}, {"text", data.dump(2)} } });
+	}
+	return nullptr;
+}
+
+// ------------------------------------------------------------------------------------------------- prompts
+
+json Tools::ListPrompts()
+{
+	return json::array({
+		json{ {"name", "balance_test"}, {"title", "Balance test"},
+			{"description", "Run the city for some months and compare the budget, services and utilities before and after."},
+			{"arguments", json::array({
+				json{ {"name", "months"}, {"description", "Game months to run (default 12)."}, {"required", false} },
+				json{ {"name", "focus"}, {"description", "What to check: budget, services, utilities, demand or all (default all)."}, {"required", false} } })} },
+		json{ {"name", "city_report"}, {"title", "City report"},
+			{"description", "A short report on the open city: finances, demand, services, utilities and problems."},
+			{"arguments", json::array()} },
+		json{ {"name", "find_problems"}, {"title", "Find problems"},
+			{"description", "Look for the city's weak points: deficits, unpowered or unwatered areas, low coverage, abandoned buildings, high crime or pollution."},
+			{"arguments", json::array()} } });
+}
+
+json Tools::GetPrompt(const std::string& name, const json& arguments)
+{
+	auto message = [](const std::string& text)
+	{
+		return json::array({ json{ {"role", "user"}, {"content", json{ {"type", "text"}, {"text", text}}} } });
+	};
+	auto argument = [&](const char* key, const std::string& fallback)
+	{
+		return arguments.contains(key) && arguments[key].is_string() && !arguments[key].get<std::string>().empty() ? arguments[key].get<std::string>() : fallback;
+	};
+	if (name == "balance_test")
+	{
+		const std::string months = argument("months", "12");
+		const std::string focus = argument("focus", "all");
+		return json{ {"description", "Balance test over " + months + " months"}, {"messages", message(
+			"Run a balance test of the open SimCity 4 city with the SC4MCP tools.\n"
+			"1. Call get_city_status, get_budget, get_demand, get_services and get_utilities and keep the results as the baseline.\n"
+			"2. Call wait_months with months=" + months + " (raise timeout_seconds if needed; it pauses the game at the end).\n"
+			"3. Call the same tools again, and get_history for the graphs that matter (list_graphs gives them).\n"
+			"4. Compare before and after with a focus on: " + focus + ". Report the numbers that changed, what looks unbalanced "
+			"(costs against capacity, coverage, deficits, demand caps) and possible causes. Read SC4SIM.log with read_log if a value looks wrong.\n"
+			"Do not change taxes, funding, ordinances or zones unless asked.")} };
+	}
+	if (name == "city_report")
+	{
+		return json{ {"description", "Report on the open city"}, {"messages", message(
+			"Write a short report on the open SimCity 4 city using the SC4MCP tools: get_city_status, get_budget, get_demand, "
+			"get_services, get_utilities, list_ordinances and get_history (population and funds over the last 24 months). "
+			"Cover finances, demand, services, utilities, and the three most important problems with a suggestion for each. "
+			"Do not change anything in the city.")} };
+	}
+	if (name == "find_problems")
+	{
+		return json{ {"description", "Weak points of the open city"}, {"messages", message(
+			"Find the weak points of the open SimCity 4 city with the SC4MCP tools. Check: the monthly balance (get_budget), "
+			"power and water shortfalls (get_utilities), education, health, police and fire coverage and capacity (get_services), "
+			"abandoned or unpowered buildings (list_lots with state=abandoned or powered=false), and the worst areas for crime, "
+			"pollution and land value (get_map_stats). For each problem give where it is (cells) and a concrete fix. "
+			"Do not change anything in the city.")} };
+	}
+	return nullptr;
 }

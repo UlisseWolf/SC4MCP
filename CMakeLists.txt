@@ -21,7 +21,12 @@ add_library(SC4MCP SHARED
   src/McpServer.cpp
   src/TickService.cpp
   src/Tools.cpp
+  src/ToolsCommon.cpp
+  src/ToolsControl.cpp
+  src/ToolsRead.cpp
   ${GZCOM}/src/cRZBaseString.cpp
+  ${GZCOM}/src/cRZCellMap.cpp
+  ${GZCOM}/src/StringResourceManager.cpp
   ${GZCOM}/src/cRZCOMDllDirector.cpp
 )
 target_include_directories(SC4MCP PRIVATE src vendor/nlohmann ${GZCOM}/include)

@@ -65,8 +65,8 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `get_taxes` | - | The twelve tax rates. |
 | `get_utilities` | `per_plant` (bool, default true) | Power (production, consumption, imports, plants, and per plant: output, load, efficiency, condition, cost), garbage (produced, landfilled, recycled, incinerated, capacity) and the water fields of the advisor data. |
 | `get_services` | `per_building` (bool) | Education (coverage, EQ, grades), health (coverage, patients against capacity, life expectancy), police, jails, crime and fire; with `per_building=true`, schools and hospitals with capacity and radius, police and fire stations and jails. |
-| `list_buildings` | `name_contains`, `occupant_group` (e.g. `0x1503`), `limit` (1-2000) | Buildings with exemplar ID, city cells and monthly cost. |
-| `list_lots` | `zone`, `state` (`occupied`, `vacant`, `abandoned`...), `powered` (bool), `limit` | Lots with a building: zone, state, occupancy, population and capacity per type, wealth, land value, power and road access. |
+| `list_buildings` | `name_contains`, `occupant_group` (e.g. `0x1503`), `limit` (1-2000), `offset` | Buildings with exemplar ID, city cells and monthly cost; paged with `next_offset`. |
+| `list_lots` | `zone`, `state` (`occupied`, `vacant`, `abandoned`...), `powered` (bool), `limit`, `offset` | Lots with a building: zone, state, occupancy, population and capacity per type, wealth, land value, power and road access. |
 | `query_cell` | `x`, `z` | One cell: zone, lot and building, land value, pollution, crime, police and fire coverage, power, congestion. |
 | `get_map_stats` | `map`, `top` (0-50), `developed_only` (bool) | Min, max, average, histogram and worst cells of `zones`, `land_value`, `crime`, `air_pollution`, `water_pollution`, `garbage`, `fire_protection`, `police_coverage`, `congestion` or `powered`. |
 | `list_graphs` | - | Every graph of the Graphs window with the history type and label of each line. |
@@ -74,6 +74,11 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `list_ordinances` | - | Every ordinance with its state and monthly income or cost. |
 | `get_advisors` | `max_messages` (1-50) | The advisors with their current messages, and the popup message. |
 | `get_game_data` | `contains` (word or list), `limit` | The raw advisor data (`game` Lua table: coverage, grades, capacities, rates...). |
+| `get_transport` | - | Commuting, transit (bus, rail, subway, monorail, ferry, airport, seaport), station use, congestion and potholes, and statistics of the congestion map. |
+| `get_loans` | - | Every loan with payment and remaining time, total borrowed, what the city can borrow now, loan step and cost. |
+| `get_neighbor_deals` | - | Deals with the neighbouring cities (power, water, garbage): city, amount, use, monthly cost; total income and expense; adjacent cities. |
+| `render_map` | `map`, `scale` (1-8), `fixed_range` (bool) | Draws a map as a PNG image the assistant can look at: `zones`, `land_value`, `crime`, `air_pollution`, `water_pollution`, `garbage`, `fire_protection`, `police_coverage`, `congestion`, `powered`. Green is good, red bad, water blue. |
+| `list_changes` | - | The changes made by the tools in this session, newest first, and whether each can be undone. |
 | `read_log` | `file` (default `SC4SIM.log`), `lines` (1-1000) | The last lines of a `.log` file next to the DLL. |
 
 ### Diagnose and compare
@@ -98,11 +103,13 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `set_building_funding` | `x`, `z`, `percent`, `purpose` (optional) | Local funding of one building. | `AllowControl=1` |
 | `set_tax` | `type` (`r_low`... `i_hightech`, `residential`, `commercial`, `industrial`, `all`), `rate` (0-20) | Tax rate, in 0.1 steps. | `AllowControl=1` |
 | `set_ordinance` | `ordinance` (ID or part of the name), `on` (bool) | Turns an ordinance on or off. | `AllowControl=1` |
+| `take_loan` | `amount` | Takes a loan (rounded to the loan step, within the borrowing limit). Cannot be undone. | `AllowControl=1` |
+| `undo_last_change` | - | Restores the values before the last funding, tax or ordinance change. | `AllowControl=1` |
 | `place_zone` | `zone`, `x1`, `z1`, `x2`, `z2`, `allow_demolition` (bool) | Zones or dezones (`zone=none`) a rectangle of up to 64 x 64 cells. Developed lots are refused unless `allow_demolition=true` (changing their zone demolishes them); plopped buildings are never touched. | `AllowBuild=1` |
 | `run_cheat` | `cheat` | Runs a cheat code as if typed in the Ctrl+X box. | `AllowCheats=1` |
 
-The tools that change the city (`set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `place_zone`,
-`run_cheat`) accept `dry_run=true` (only describe the change) and, with `ConfirmChanges=1` (default), ask before
+The tools that change the city (`set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `take_loan`,
+`undo_last_change`, `place_zone`, `run_cheat`) accept `dry_run=true` (only describe the change) and, with `ConfirmChanges=1` (default), ask before
 applying: a client that supports MCP elicitation shows the user a confirmation; with other clients the tool returns a
 preview with `confirmation_required` and applies the change only when called again with `confirm=true`.
 
@@ -115,6 +122,22 @@ Cells are `(x, z)` city cells, as `list_buildings`, `list_lots` and `query_cell`
 |---|---|
 | `sc4://city/status`, `sc4://city/budget`, `sc4://city/demand` | Same as `get_city_status`, `get_budget`, `get_demand`. |
 | `sc4://city/utilities`, `sc4://city/services`, `sc4://city/ordinances` | Same as `get_utilities`, `get_services`, `list_ordinances`. |
+| `sc4://city/transport`, `sc4://city/loans`, `sc4://city/neighbors`, `sc4://city/growth` | Same as `get_transport`, `get_loans`, `get_neighbor_deals`, `diagnose_growth`. |
+
+Resources can be subscribed to: the server then sends `notifications/resources/updated` for them at every new game
+month (see [Notifications](#notifications)).
+
+### Notifications
+
+A client that opens the notification stream (`GET /mcp` with `Accept: text/event-stream`, done automatically by
+clients that support it) receives, while the game runs:
+
+- `notifications/message` (MCP logging) at every new game month, with date, population, funds and monthly balance;
+- warnings when the funds go below zero, the month ends in deficit, the power plants run at full load or buildings
+  lose power, and notices when a city is opened or closed;
+- `notifications/resources/updated` for the subscribed resources at every new month.
+
+`logging/setLevel` chooses the lowest level sent (`info` by default; `warning` keeps only the warnings).
 | `sc4://log/SC4SIM.log`, `sc4://log/SC4MCP.log` | The last 200 lines of the log. |
 
 | Prompt | Arguments | What it asks the assistant |
@@ -466,6 +489,15 @@ Issues and pull requests are welcome. Please:
 - test with SimCity 4 1.1.641 and describe the test in the pull request.
 
 ## Changelog
+
+### 1.3.0
+
+- New tools: `get_transport`, `get_loans`, `take_loan`, `get_neighbor_deals`, `render_map` (PNG images of the city
+  maps), `list_changes`, `undo_last_change`.
+- Notifications: a standalone stream (`GET /mcp`) with new-month messages, warnings and resource updates; resource
+  subscriptions and `logging/setLevel`.
+- Paging: `offset` and `next_offset` for `list_buildings` and `list_lots`.
+- Every tool declares an output schema; four new resources.
 
 ### 1.2.0
 

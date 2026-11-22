@@ -704,6 +704,7 @@ namespace
 		const bool filterPower = arguments.contains("powered");
 		const bool powered = arguments.value("powered", true);
 		const size_t limit = static_cast<size_t>(std::clamp(arguments.value("limit", 100), 1, 2000));
+		const size_t offset = static_cast<size_t>(std::max(0, arguments.value("offset", 0)));
 
 		json list = json::array();
 		size_t total = 0;
@@ -721,10 +722,12 @@ namespace
 			}
 			if (filterPower && (!lot->GetNeedsPower() || lot->GetHasPower() != powered)) continue;
 			++total;
-			if (list.size() < limit) list.push_back(LotInfo(city, lot, occupant));
+			if (total > offset && list.size() < limit) list.push_back(LotInfo(city, lot, occupant));
 		}
-		return json{ {"total", total}, {"returned", list.size()}, {"lots", list},
+		json out{ {"total", total}, {"offset", offset}, {"returned", list.size()}, {"lots", list},
 			{"note", "Lots with a building. state=abandoned lists vacant lots (the game's abandoned buildings)."} };
+		if (offset + list.size() < total) out["next_offset"] = offset + list.size();
+		return out;
 	}
 
 	// ------------------------------------------------------------------------------------------------- ordinances
@@ -863,7 +866,7 @@ namespace ToolsCommon
 		tools.push_back({ "list_lots",
 			"Lots with a building: cells, zone, state, occupancy, population and capacity by type, wealth, land value, power and road access. Filters: zone (e.g. residential_high), state (occupied, vacant, constructing... or abandoned), powered (true/false), limit.",
 			Schema({ {"zone", {{"type", "string"}}}, {"state", {{"type", "string"}}}, {"powered", {{"type", "boolean"}}},
-				{"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 2000}}} }), Permission::Read,
+				{"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 2000}}}, {"offset", {{"type", "integer"}, {"minimum", 0}}} }), Permission::Read,
 			GameThread([](const json& arguments) { return ListLots(arguments); }) });
 
 		tools.push_back({ "list_ordinances",

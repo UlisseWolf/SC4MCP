@@ -42,6 +42,13 @@ namespace ToolsCommon
 	void AddReadTools(std::vector<ToolDef>& tools);
 	void AddControlTools(std::vector<ToolDef>& tools);
 	void AddDiagnosticTools(std::vector<ToolDef>& tools);
+	void AddExtraTools(std::vector<ToolDef>& tools);
+
+	// Changes made by the tools, newest last, with the calls that undo them (undo_last_change).
+	void RecordChange(const std::string& description, json undoCalls);
+
+	// A PNG image (8-bit palette, uncompressed deflate) as base64. pixels: width x height palette indexes.
+	std::string EncodePngBase64(int width, int height, const std::vector<uint8_t>& pixels, const std::vector<uint32_t>& paletteRgb);
 
 	// Whether tools that change the city ask for a confirmation first (SC4MCP.ini ConfirmChanges).
 	bool ConfirmChangesEnabled();

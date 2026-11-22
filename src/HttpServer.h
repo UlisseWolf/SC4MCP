@@ -29,7 +29,8 @@ namespace HttpServer
 	public:
 		virtual ~Stream() = default;
 		virtual bool Begin() = 0;
-		virtual bool Event(const std::string& data) = 0;
+		virtual bool Event(const std::string& data) = 0;   // false once the client has gone
+		virtual bool Comment(const std::string& text) = 0; // keep-alive line, ignored by clients
 		virtual bool Started() const = 0;
 	};
 

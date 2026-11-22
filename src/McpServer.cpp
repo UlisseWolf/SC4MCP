@@ -5,9 +5,11 @@
 // accepts text/event-stream sends progress notifications (it gave a progressToken) or asks the user to confirm a
 // change (elicitation, when the client declared it): then the notifications, the elicitation/create request and the
 // result are server-sent events on that response, and the client POSTs its answer to the elicitation as a separate
-// request. GET /mcp answers 405 because the server never pushes messages on its own. With AuthToken set in
+// request. GET /mcp with Accept: text/event-stream opens the notification stream (Events.cpp: new month, warnings,
+// updated resources); without it GET answers 405. With AuthToken set in
 // SC4MCP.ini, /mcp requires "Authorization: Bearer <token>". GET /setup shows the client configurations.
 #include "McpServer.h"
+#include "Events.h"
 #include "McpLog.h"
 #include "Tools.h"
 #include "json.hpp"
@@ -25,7 +27,7 @@ using nlohmann::json;
 namespace
 {
 	constexpr const char* kServerName = "SC4MCP";
-	constexpr const char* kServerVersion = "1.2.0";
+	constexpr const char* kServerVersion = "1.3.0";
 	std::string authToken;
 	uint16_t serverPort = 8765;
 	std::atomic<bool> clientElicitation{ false };
@@ -137,7 +139,7 @@ namespace
 			if (params.contains("clientInfo") && params["clientInfo"].is_object()) client = params["clientInfo"].value("name", client);
 			McpLog::Write("initialize from %s (protocol %s -> %s)", client.c_str(), requested.c_str(), version.c_str());
 			return Result(id, json{ {"protocolVersion", version},
-				{"capabilities", {{"tools", {{"listChanged", false}}}, {"resources", {{"listChanged", false}, {"subscribe", false}}}, {"prompts", {{"listChanged", false}}}}},
+				{"capabilities", {{"tools", {{"listChanged", false}}}, {"resources", {{"listChanged", false}, {"subscribe", true}}}, {"prompts", {{"listChanged", false}}}, {"logging", json::object()}}},
 				{"serverInfo", {{"name", kServerName}, {"version", kServerVersion}}},
 				{"instructions", kInstructions} });
 		}
@@ -164,7 +166,16 @@ namespace
 			if (stream && clientElicitation) confirm = [stream](const std::string& text) { return AskUser(*stream, text); };
 			json output = Tools::Call(name, arguments, isError, Tools::Context{ progress, confirm });
 			McpLog::Write("tools/call %s%s", name.c_str(), isError ? " (error)" : "");
-			json result{ {"content", json::array({ {{"type", "text"}, {"text", output.dump(2)}} })}, {"isError", isError} };
+			json content = json::array();
+			if (output.is_object() && output.contains("_image") && output["_image"].is_object())
+			{
+				// A tool that draws: the image goes first, as an MCP image block.
+				content.push_back(json{ {"type", "image"}, {"data", output["_image"].value("data", std::string())},
+					{"mimeType", output["_image"].value("mimeType", std::string("image/png"))} });
+				output.erase("_image");
+			}
+			content.push_back(json{ {"type", "text"}, {"text", output.dump(2)} });
+			json result{ {"content", content}, {"isError", isError} };
 			if (output.is_object()) result["structuredContent"] = output;
 			return Result(id, result);
 		}
@@ -176,6 +187,18 @@ namespace
 			json contents = Tools::ReadResource(uri);
 			if (contents.is_null()) return Error(id, -32002, "Resource not found: " + uri);
 			return Result(id, json{ {"contents", contents} });
+		}
+		if (method == "resources/subscribe" || method == "resources/unsubscribe")
+		{
+			const std::string uri = params.value("uri", std::string());
+			if (uri.empty()) return Error(id, -32602, "Missing uri");
+			if (method == "resources/subscribe") Events::Subscribe(uri); else Events::Unsubscribe(uri);
+			return Result(id, json::object());
+		}
+		if (method == "logging/setLevel")
+		{
+			Events::SetLevel(params.value("level", std::string("info")));
+			return Result(id, json::object());
 		}
 		if (method == "prompts/list") return Result(id, json{ {"prompts", Tools::ListPrompts()} });
 		if (method == "prompts/get")
@@ -261,12 +284,20 @@ HttpServer::Response McpServer::HandleHttp(const HttpServer::Request& http, Http
 	}
 	if (path == "/setup" && method == "GET") return { 200, "text/html; charset=utf-8", SetupPage() };
 	if (path != "/mcp") return { 404, "text/plain", "Not found. The MCP endpoint is /mcp; the client configurations are at /setup" };
-	if (method != "POST") return { 405, "text/plain", "Use POST" };
 	if (!Authorized(http.authorization))
 	{
 		McpLog::Write("Request refused: missing or wrong Authorization token.");
 		return { 401, "application/json", Error(nullptr, -32001, "Unauthorized: set the AuthToken of SC4MCP.ini as a Bearer token.").dump() };
 	}
+	if (method == "GET" && http.accept.find("text/event-stream") != std::string::npos)
+	{
+		Events::Serve(stream);
+		HttpServer::Response streamed;
+		streamed.streamed = true;
+		return streamed;
+	}
+	if (method == "DELETE") return { 204, "text/plain", "" };
+	if (method != "POST") return { 405, "text/plain", "Use POST, or GET with Accept: text/event-stream" };
 
 	json request = json::parse(body, nullptr, false);
 	if (request.is_discarded()) return { 400, "application/json", Error(nullptr, -32700, "Parse error").dump() };

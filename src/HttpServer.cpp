@@ -99,20 +99,22 @@ namespace
 		}
 	}
 
-	void SendAll(SOCKET client, const std::string& data)
+	bool SendAll(SOCKET client, const std::string& data)
 	{
 		size_t sent = 0;
 		while (sent < data.size())
 		{
 			const int n = send(client, data.data() + sent, static_cast<int>(std::min<size_t>(data.size() - sent, 64 * 1024)), 0);
-			if (n <= 0) return;
+			if (n <= 0) return false;
 			sent += static_cast<size_t>(n);
 		}
+		return true;
 	}
 
 	void Reply(SOCKET client, const HttpServer::Response& response, const std::string& extraHeaders = {})
 	{
 		std::string head = "HTTP/1.1 " + std::to_string(response.status) + " " + Reason(response.status) + "\r\n";
+		if (response.status == 202 || response.status == 204) { SendAll(client, head + "Content-Length: 0\r\nConnection: close\r\n\r\n"); return; }
 		if (!response.body.empty()) head += "Content-Type: " + response.contentType + "\r\n";
 		head += "Content-Length: " + std::to_string(response.body.size()) + "\r\n";
 		head += "Cache-Control: no-store\r\nConnection: close\r\n" + extraHeaders + "\r\n";
@@ -128,15 +130,24 @@ namespace
 		{
 			if (started) return true;
 			started = true;
-			SendAll(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
-			return true;
+			failed = !SendAll(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n");
+			return !failed;
 		}
 
 		bool Event(const std::string& data) override
 		{
 			if (!started) Begin();
-			SendAll(client, "event: message\r\ndata: " + data + "\r\n\r\n");
-			return true;
+			if (failed) return false;
+			failed = !SendAll(client, "event: message\r\ndata: " + data + "\r\n\r\n");
+			return !failed;
+		}
+
+		bool Comment(const std::string& text) override
+		{
+			if (!started) Begin();
+			if (failed) return false;
+			failed = !SendAll(client, ": " + text + "\r\n\r\n");
+			return !failed;
 		}
 
 		bool Started() const override { return started; }
@@ -144,6 +155,7 @@ namespace
 	private:
 		SOCKET client;
 		bool started = false;
+		bool failed = false;
 	};
 
 	void Handle(SOCKET client)

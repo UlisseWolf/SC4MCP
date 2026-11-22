@@ -24,6 +24,8 @@ add_library(SC4MCP SHARED
   src/ToolsCommon.cpp
   src/ToolsControl.cpp
   src/ToolsDiagnose.cpp
+  src/ToolsExtra.cpp
+  src/Events.cpp
   src/ToolsRead.cpp
   ${GZCOM}/src/cRZBaseString.cpp
   ${GZCOM}/src/cRZCellMap.cpp

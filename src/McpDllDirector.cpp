@@ -1,4 +1,5 @@
 // SC4MCP - DLL director: reads SC4MCP.ini, registers the tick service and starts the MCP HTTP server.
+#include "Events.h"
 #include "HttpServer.h"
 #include "MainThreadQueue.h"
 #include "McpLog.h"
@@ -79,7 +80,7 @@ public:
 	{
 		McpLog::Open();
 		settings = ReadSettings();
-		McpLog::Write("SC4MCP 1.2.0 loaded. Port=%u Enabled=%d ReadOnly=%d AllowControl=%d AllowCheats=%d AllowBuild=%d ConfirmChanges=%d AuthToken=%s",
+		McpLog::Write("SC4MCP 1.3.0 loaded. Port=%u Enabled=%d ReadOnly=%d AllowControl=%d AllowCheats=%d AllowBuild=%d ConfirmChanges=%d AuthToken=%s",
 			settings.port, settings.enabled, settings.readOnly, settings.allowControl, settings.allowCheats, settings.allowBuild,
 			settings.confirmChanges, settings.authToken.empty() ? "off" : "on");
 		if (settings.tokenGenerated) McpLog::Write("AuthToken=auto: a new token was generated and written to SC4MCP.ini; http://127.0.0.1:%u/setup shows the client configurations with it.", settings.port);
@@ -112,6 +113,7 @@ public:
 
 	bool PostAppShutdown() override
 	{
+		Events::Stop();
 		MainThreadQueue::Close();
 		HttpServer::Stop();
 		tick.Unregister();

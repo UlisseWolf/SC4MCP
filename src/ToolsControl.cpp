@@ -69,6 +69,8 @@ namespace
 		const SC4Percentage* after = department->GetFundingPercentage();
 		const double afterPercent = after ? after->percentage * 100.0 : clamped;
 		McpLog::Write("set_funding: department 0x%08X %.1f%% -> %.1f%%", departmentID, beforePercent, afterPercent);
+		RecordChange("Funding of " + DepartmentName(department) + " (" + Hex(departmentID) + ") " + std::to_string(static_cast<int>(beforePercent + 0.5)) + "% -> " + std::to_string(static_cast<int>(afterPercent + 0.5)) + "%",
+			json::array({ json{ {"tool", "set_funding"}, {"arguments", json{ {"department", Hex(departmentID)}, {"percent", beforePercent} }} } }));
 		return json{ {"department", Hex(departmentID)}, {"name", DepartmentName(department)}, {"before_percent", beforePercent},
 			{"funding_percent", afterPercent}, {"max_percent", maxPercent}, {"clamped", clamped != percent} };
 	}
@@ -115,6 +117,13 @@ namespace
 		}
 		if (changed.empty()) return Error("The building has no budget item with that purpose.");
 		McpLog::Write("set_building_funding: %s at (%d,%d) -> %.1f%%", BuildingName(building).c_str(), x, z, clamped);
+		json undo = json::array();
+		for (const json& change : changed)
+		{
+			if (!change.value("changed", false)) continue;
+			undo.push_back(json{ {"tool", "set_building_funding"}, {"arguments", json{ {"x", x}, {"z", z}, {"purpose", change["purpose"]}, {"percent", change["before_percent"]} }} });
+		}
+		RecordChange("Local funding of " + BuildingName(building) + " at (" + std::to_string(x) + ", " + std::to_string(z) + ") -> " + std::to_string(static_cast<int>(clamped + 0.5)) + "%", undo);
 		json after = json::array();
 		for (const auto& item : CostOf(budget, building).items)
 		{
@@ -234,6 +243,14 @@ namespace
 		}
 		if (changed.empty()) return Error("Unknown tax type. Use one of r_low, r_medium, r_high, cs_low, cs_medium, cs_high, co_medium, co_high, i_agriculture, i_dirty, i_manufacturing, i_hightech, residential, commercial, industrial or all.");
 		McpLog::Write("set_tax: %s -> %.1f%%", type.c_str(), rate);
+		json undo = json::array();
+		for (const json& change : changed)
+		{
+			if (change.value("ok", false)) undo.push_back(json{ {"tool", "set_tax"}, {"arguments", json{ {"type", change["type"]}, {"rate", change["before"]} }} });
+		}
+		char rateText[16];
+		std::snprintf(rateText, sizeof(rateText), "%.1f", rate);
+		RecordChange("Tax " + type + " -> " + rateText + "%", undo);
 		return json{ {"rate", rate}, {"changes", changed}, {"note", "The advisor data shows the new rates after the next monthly update."} };
 	}
 
@@ -295,6 +312,11 @@ namespace
 		const bool ok = ordinances->SetOrdinanceOn(id, on);
 		const bool after = ordinances->IsOrdinanceOn(id);
 		McpLog::Write("set_ordinance: %s (0x%08X) %s -> %s", label.c_str(), id, before ? "on" : "off", after ? "on" : "off");
+		if (before != after)
+		{
+			RecordChange(std::string(after ? "Enacted " : "Repealed ") + label,
+				json::array({ json{ {"tool", "set_ordinance"}, {"arguments", json{ {"ordinance", Hex(id)}, {"on", before} }} } }));
+		}
 		return json{ {"id", Hex(id)}, {"name", label}, {"before", before}, {"on", after}, {"ok", ok},
 			{"monthly_adjusted_income", ordinance->GetMonthlyAdjustedIncome()} };
 	}

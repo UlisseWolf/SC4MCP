@@ -58,6 +58,7 @@ namespace
 			AddReadTools(all);
 			AddControlTools(all);
 			AddDiagnosticTools(all);
+			AddExtraTools(all);
 			return all;
 		}();
 		return tools;
@@ -208,7 +209,7 @@ namespace
 		return out;
 	}
 
-	json ListBuildings(const std::string& nameFilter, uint32_t occupantGroup, size_t limit)
+	json ListBuildings(const std::string& nameFilter, uint32_t occupantGroup, size_t limit, size_t offset)
 	{
 		cISC4City* city = City();
 		if (!city) return NoCity();
@@ -222,13 +223,15 @@ namespace
 			const std::string name = BuildingName(occupant);
 			if (!needle.empty() && Lower(name).find(needle) == std::string::npos) continue;
 			++total;
-			if (list.size() >= limit) continue;
+			if (total <= offset || list.size() >= limit) continue;
 			json b{ {"name", name}, {"exemplar", Hex(BuildingType(occupant))}, {"cells", BuildingCells(occupant)} };
 			const BuildingCost cost = CostOf(budget, occupant);
 			if (!cost.items.empty()) b["monthly_cost"] = cost.monthly;
 			list.push_back(b);
 		}
-		return json{ {"total", total}, {"returned", list.size()}, {"buildings", list} };
+		json out{ {"total", total}, {"offset", offset}, {"returned", list.size()}, {"buildings", list} };
+		if (offset + list.size() < total) out["next_offset"] = offset + list.size();
+		return out;
 	}
 
 	// Asks the simulator for a speed; the game applies it on its next frames.
@@ -379,15 +382,16 @@ namespace ToolsCommon
 			GameThread([](const json& arguments) { return GetBudget(arguments.value("per_building", false)); }) });
 
 		tools.push_back({ "list_buildings",
-			"Buildings in the city with exemplar ID, city cells and monthly cost. Filter by name substring and/or occupant group (e.g. 0x1503 schools, 0x1507 health, 0x1400 power).",
+			"Buildings in the city with exemplar ID, city cells and monthly cost. Filter by name substring and/or occupant group (e.g. 0x1503 schools, 0x1507 health, 0x1400 power). Paged: limit and offset; next_offset is returned when more results remain.",
 			Schema({ {"name_contains", {{"type", "string"}}}, {"occupant_group", {{"type", "string"}, {"description", "Hex occupant group, e.g. 0x1503."}}},
-				{"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 2000}}} }), Permission::Read,
+				{"limit", {{"type", "integer"}, {"minimum", 1}, {"maximum", 2000}}}, {"offset", {{"type", "integer"}, {"minimum", 0}, {"description", "Skip this many results (next_offset of the previous page)."}}} }), Permission::Read,
 			GameThread([](const json& arguments)
 			{
 				const std::string filter = arguments.value("name_contains", std::string());
 				const uint32_t group = arguments.contains("occupant_group") ? ParseId(arguments["occupant_group"]) : 0;
 				const size_t limit = static_cast<size_t>(std::clamp(arguments.value("limit", 200), 1, 2000));
-				return ListBuildings(filter, group, limit);
+				const size_t offset = static_cast<size_t>(std::max(0, arguments.value("offset", 0)));
+				return ListBuildings(filter, group, limit, offset);
 			}) });
 
 		tools.push_back({ "read_log",
@@ -506,7 +510,8 @@ json Tools::List()
 	for (const ToolDef& tool : Registry())
 	{
 		if (!Allowed(tool.permission)) continue;
-		json entry{ {"name", tool.name}, {"description", tool.description}, {"inputSchema", tool.inputSchema} };
+		json entry{ {"name", tool.name}, {"description", tool.description}, {"inputSchema", tool.inputSchema},
+			{"outputSchema", json{ {"type", "object"}, {"description", "The result as a JSON object; on failure it has an \"error\" string."} }} };
 		const bool readOnly = tool.permission == Permission::Read;
 		entry["annotations"] = json{ {"readOnlyHint", readOnly}, {"destructiveHint", tool.permission == Permission::Build || tool.permission == Permission::Cheats},
 			{"idempotentHint", readOnly}, {"openWorldHint", false} };
@@ -555,6 +560,10 @@ namespace
 			{ "sc4://city/utilities", "Utilities", "Power, water and garbage: production, consumption and plants.", "get_utilities", json::object() },
 			{ "sc4://city/services", "Services", "Education, health, police, jails and fire coverage and capacity.", "get_services", json::object() },
 			{ "sc4://city/ordinances", "Ordinances", "Every ordinance with its state and monthly income or cost.", "list_ordinances", json::object() },
+			{ "sc4://city/transport", "Transport", "Commuting, transit, congestion and potholes.", "get_transport", json::object() },
+			{ "sc4://city/loans", "Loans", "Loans, borrowing limit and loan costs.", "get_loans", json::object() },
+			{ "sc4://city/neighbors", "Neighbour deals", "Deals with the neighbouring cities and their income and expense.", "get_neighbor_deals", json::object() },
+			{ "sc4://city/growth", "Growth diagnosis", "Why the city does or does not grow.", "diagnose_growth", json::object() },
 			{ "sc4://log/SC4SIM.log", "SC4SIM.log", "The last 200 lines of SC4SIM.log.", "read_log", json{ {"file", "SC4SIM.log"}, {"lines", 200} } },
 			{ "sc4://log/SC4MCP.log", "SC4MCP.log", "The last 200 lines of SC4MCP.log.", "read_log", json{ {"file", "SC4MCP.log"}, {"lines", 200} } },
 		};
@@ -639,7 +648,7 @@ json Tools::GetPrompt(const std::string& name, const json& arguments)
 			"Find the weak points of the open SimCity 4 city with the SC4MCP tools. Check: the monthly balance (get_budget), "
 			"power and water shortfalls (get_utilities), education, health, police and fire coverage and capacity (get_services), "
 			"abandoned or unpowered buildings (list_lots with state=abandoned or powered=false), and the worst areas for crime, "
-			"pollution and land value (get_map_stats). For each problem give where it is (cells) and a concrete fix. "
+			"pollution and land value (get_map_stats, and render_map to look at them). Start with diagnose_growth. For each problem give where it is (cells) and a concrete fix. "
 			"Do not change anything in the city.")} };
 	}
 	return nullptr;

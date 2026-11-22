@@ -70,6 +70,8 @@
     <ClCompile Include="src\ToolsCommon.cpp" />
     <ClCompile Include="src\ToolsControl.cpp" />
     <ClCompile Include="src\ToolsDiagnose.cpp" />
+    <ClCompile Include="src\ToolsExtra.cpp" />
+    <ClCompile Include="src\Events.cpp" />
     <ClCompile Include="src\ToolsRead.cpp" />
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZBaseString.cpp">
       <WarningLevel>Level3</WarningLevel>
@@ -85,6 +87,7 @@
     </ClCompile>
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="src\Events.h" />
     <ClInclude Include="src\HttpServer.h" />
     <ClInclude Include="src\MainThreadQueue.h" />
     <ClInclude Include="src\McpLog.h" />

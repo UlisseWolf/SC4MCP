@@ -1,0 +1,90 @@
+name: Release
+
+# Builds and attests the release zip for a vMAJOR.MINOR.PATCH tag on a commit of master, with
+# memo33/sc4-dll-actions, and leaves it in a draft release. See "Releases" in the README.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions: {}
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Validate tag
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          if [[ ! "$TAG_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]]; then
+            echo "::error::Release tags look like v1.0.0 or v1.0.0-rc.1, not $TAG_NAME"
+            exit 1
+          fi
+
+      - name: Require a public repository
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "::error::Attestations need a public repository"
+          exit 1
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Require a commit of master
+        run: |
+          git fetch --no-tags origin master
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/master; then
+            echo "::error::Releases are built only from master: merge the commit into master, then tag it"
+            exit 1
+          fi
+
+      - name: Match the version in the source
+        env:
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/.*kServerVersion = "\([^"]*\)".*/\1/p' src/McpServer.cpp)
+          if [[ "${TAG_NAME#v}" != "$version"* ]]; then
+            echo "::error::Tag $TAG_NAME does not match kServerVersion $version in src/McpServer.cpp"
+            exit 1
+          fi
+
+  build:
+    needs: check
+    # Head of its v1 branch on 2026-11-22. Change --signer-digest in the README with the pin.
+    uses: memo33/sc4-dll-actions/.github/workflows/attested-build.yaml@c7aa3d2d748a9bd52a573a79f1f6ba78dde6f25f
+    with:
+      build-os: windows-2022
+      build-script: |
+        $PSNativeCommandUseErrorActionPreference = $true
+        cmake -S . -B build -A Win32
+        cmake --build build --config Release --parallel
+
+        $dll = 'build/Release/SC4MCP.dll'
+        if (-not (Test-Path $dll)) { throw "$dll is missing" }
+        $out = New-Item -ItemType Directory -Force -Path release-package
+        Copy-Item $dll, SC4MCP.ini, README.md, Changelog.md, LICENSE -Destination $out
+        Copy-Item vendor/gzcom-dll/LICENSE (Join-Path $out 'LICENSE-gzcom-dll')
+        Copy-Item vendor/nlohmann/LICENSE.MIT (Join-Path $out 'LICENSE-nlohmann-json.txt')
+        # LF line endings, so sha256sum -c reads it on any system.
+        $sums = Get-ChildItem -File $out | Get-FileHash -Algorithm SHA256 |
+          ForEach-Object { "$($_.Hash.ToLowerInvariant())  $(Split-Path -Leaf $_.Path)`n" }
+        [IO.File]::WriteAllText((Join-Path $out.FullName 'SHA256SUMS.txt'), -join $sums)
+      build-output: release-package
+      artifact-name: SC4MCP-${{ github.ref_name }}-win32.zip
+      attestation-subject-path: SC4MCP.dll
+      prerelease: ${{ contains(github.ref_name, '-') }}
+    permissions:
+      id-token: write
+      attestations: write
+      artifact-metadata: write
+      contents: write

@@ -2,6 +2,7 @@
 
 **A Model Context Protocol server that runs inside SimCity 4.**
 
+[![Build](https://github.com/UlisseWolf/SC4MCP/actions/workflows/build.yml/badge.svg?branch=master)](https://github.com/UlisseWolf/SC4MCP/actions/workflows/build.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 ![Platform](https://img.shields.io/badge/platform-Windows%20(x86)-lightgrey)
 ![Game](https://img.shields.io/badge/SimCity%204-1.1.641-green)
@@ -30,6 +31,7 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - [How it works](#how-it-works)
 - [Security](#security)
 - [Building from source](#building-from-source)
+- [Releases](#releases)
 - [Troubleshooting](#troubleshooting)
 - [Contributing](#contributing)
 - [Changelog](Changelog.md)
@@ -532,6 +534,44 @@ cmake --build build --config Release
 The other dependency, [nlohmann/json](https://github.com/nlohmann/json), is included in `vendor/nlohmann`; nothing
 else needs to be installed.
 
+## Releases
+
+The workflows in `.github/workflows` run only for the `master` branch:
+
+- `build.yml` builds the DLL on every push to `master` and every pull request into `master`, and keeps it as a
+  workflow artifact with `SC4MCP.ini`. Work on `staging` is built when it is merged or proposed into `master`.
+- `release.yml` runs for a `vMAJOR.MINOR.PATCH` tag (or `v1.4.0-rc.1` for a prerelease). It refuses tags on commits
+  that are not in `master` and tags that do not match `kServerVersion` in `src/McpServer.cpp`. Then the reusable
+  workflow of [sc4-dll-actions](https://github.com/memo33/sc4-dll-actions) builds a zip with the DLL, the INI,
+  README, changelog, licenses and `SHA256SUMS.txt`, attests the zip and the DLL, and leaves them in a draft release.
+
+To release, merge `staging` into `master`, then tag the merge commit and push the tag:
+
+```sh
+git checkout master && git merge staging && git push origin master
+git tag v1.4.0 && git push origin v1.4.0
+```
+
+Anyone can check a download:
+
+```sh
+gh attestation verify SC4MCP-v1.4.0-win32.zip --repo UlisseWolf/SC4MCP \
+  --deny-self-hosted-runners --signer-repo memo33/sc4-dll-actions \
+  --signer-digest c7aa3d2d748a9bd52a573a79f1f6ba78dde6f25f
+```
+
+Publishing the draft starts `sc4pac.yml`, which updates the package in an
+[sc4pac](https://memo33.github.io/sc4pac/) channel with
+[sc4pac-release-action](https://github.com/caspervg/sc4pac-release-action). It skips prereleases and is off until:
+
+1. a fork of the channel exists (default `sebamarynissen/simtropolis-channel`),
+2. the environment `sc4pac` (tags `v*` only) has the secret `SC4PAC_FORK_TOKEN`, a fine-grained token with
+   *Contents: Read and write* on that fork,
+3. the repository variable `SC4PAC_ASSET_ID` names the release zip's asset in the channel (`SC4PAC_CHANNEL` for
+   another channel).
+
+Dependabot proposes updates of the actions to `master` once a month.
+
 ## Troubleshooting
 
 | Symptom | Cause and fix |
@@ -567,6 +607,8 @@ Every version and its changes are listed in [Changelog.md](Changelog.md).
 - [dbpf-mcp](https://github.com/caspervg/dbpf-mcp) by caspervg: the reference for reading DBPF files, used for
   `find_plugin_conflicts` and `find_resource_file`.
 - [nlohmann/json](https://github.com/nlohmann/json) by Niels Lohmann: JSON for the MCP protocol.
+- [sc4-seamless-region](https://github.com/caspervg/sc4-seamless-region) by caspervg: the GitHub workflows, and
+  [sc4-dll-actions](https://github.com/memo33/sc4-dll-actions) by memo33: the attested release build.
 
 ## License
 

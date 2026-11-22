@@ -5,6 +5,8 @@ All notable changes to SC4MCP are listed here, newest first. Versions follow
 
 ## 1.4.0
 
+- GitHub workflows, after [sc4-seamless-region](https://github.com/caspervg/sc4-seamless-region): build on
+  `master`, attested releases from `v*` tags on `master`, sc4pac update when a release is published, Dependabot.
 - The gzcom-dll SDK is now the [SC4SDK](https://github.com/SC4SDK/gzcom-dll) version, as a git submodule. Its
   corrected signatures fix the monthly upkeep of jails (now the sum of every jail, also shown per jail).
 - Players: `suggest_location` (where to build schools, hospitals, fire and police stations), `tax_what_if`,

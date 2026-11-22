@@ -27,7 +27,7 @@ using nlohmann::json;
 namespace
 {
 	constexpr const char* kServerName = "SC4MCP";
-	constexpr const char* kServerVersion = "1.3.0";
+	constexpr const char* kServerVersion = "1.4.0";
 	std::string authToken;
 	uint16_t serverPort = 8765;
 	std::atomic<bool> clientElicitation{ false };

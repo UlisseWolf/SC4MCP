@@ -45,6 +45,11 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - **Drive the simulation.** Pause, change the speed, run for N game months with live progress, save the city, run
   cheat codes (including the cheats registered by other DLL plugins).
 - **Manage the city.** Department and building funding, tax rates, ordinances and zoning.
+- **Plan the city.** Where to build the next school, hospital, fire or police station, what a tax change would
+  earn before making it, the cities of the region, CSV exports for spreadsheets.
+- **Help modders.** Read any exemplar with its inherited cohort properties, audit the cost and capacity of civic
+  buildings, list the plugins and DLLs, find which plugin files override each other, list every cheat, and run test
+  scenarios that end in PASS or FAIL.
 - **Read plugin logs.** The last lines of any `.log` file in the Plugins folder, for example `SC4SIM.log`.
 - **Safe by default.** Listens on `127.0.0.1` only, rejects non-local browser origins, optional bearer token, and
   every group of tools that changes the city can be turned off in `SC4MCP.ini`.
@@ -77,20 +82,39 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `get_transport` | - | Commuting, transit (bus, rail, subway, monorail, ferry, airport, seaport), station use, congestion and potholes, and statistics of the congestion map. |
 | `get_loans` | - | Every loan with payment and remaining time, total borrowed, what the city can borrow now, loan step and cost. |
 | `get_neighbor_deals` | - | Deals with the neighbouring cities (power, water, garbage): city, amount, use, monthly cost; total income and expense; adjacent cities. |
-| `render_map` | `map`, `scale` (1-8), `fixed_range` (bool) | Draws a map as a PNG image the assistant can look at: `zones`, `land_value`, `crime`, `air_pollution`, `water_pollution`, `garbage`, `fire_protection`, `police_coverage`, `congestion`, `powered`. Green is good, red bad, water blue. |
+| `render_map` | `map`, `scale` (1-8), `fixed_range` (bool), `highlight` | Draws a map as a PNG image the assistant can look at: `zones`, `land_value`, `crime`, `air_pollution`, `water_pollution`, `garbage`, `fire_protection`, `police_coverage`, `congestion`, `powered`. Green is good, red bad, water blue. `highlight` paints in magenta the `abandoned` lots, the `unpowered` lots, the lots with `no_road`, the buildings of an occupant group (`0x1503`) or the buildings whose name contains a text (`name:clinic`). |
+| `get_region` | - | Every city of the region with position and size and, for established cities, population, jobs and mayor rating; region totals. |
+| `export_csv` | `what` (`buildings`, `lots`, `budget`, `history`, `map`), `arguments` | Writes a CSV file (UTF-8, opens in Excel) to `SC4MCP_exports` next to the DLL; `arguments` go to the matching tool, e.g. `{"graph": "0x06", "months": 24}` or `{"map": "land_value"}`. |
 | `list_changes` | - | The changes made by the tools in this session, newest first, and whether each can be undone. |
 | `read_log` | `file` (default `SC4SIM.log`), `lines` (1-1000) | The last lines of a `.log` file next to the DLL. |
 
-### Diagnose and compare
+### Plan, diagnose and compare
 
 | Tool | Parameters | Description |
 |---|---|---|
 | `diagnose_growth` | - | Why the city does or does not grow: demand per type, undeveloped zones, abandoned lots by the reason the game recorded (low desirability, no power, no water, commute time, low demand), unpowered lots, lots without road access, development failures, power margin, taxes above the neutral rate; with plain findings. |
 | `diagnose_cell` | `x`, `z` | Why one cell does not grow or was abandoned, with plain reasons. |
-| `get_building_properties` | `x` + `z`, or `exemplar`, or `type` + `group` + `instance` | The properties of a building as the game loaded them, after every plugin override: its in-city values and its exemplar. |
-| `snapshot_save` | `name` (default `default`) | Keeps a copy of status, budget, demand, taxes, services and utilities in memory. |
+| `suggest_location` | `service` (`school`, `hospital`, `fire`, `police`), `count` (1-10), `radius_m` | The areas with the most people outside the coverage of the existing buildings of that kind (residents for schools and hospitals, residents and workers for fire and police), with a free cell nearby and the coverage now. The radius defaults to the median of the existing buildings. |
+| `tax_what_if` | `type` + `rate`, or `rates` (object) | Estimated monthly tax income with other rates, without changing anything: income per type from the assessed value, calibrated on the current income, with the distance from the neutral rate. |
+| `get_building_properties` | `x` + `z`, or `exemplar`, or `type` + `group` + `instance` | The properties of a building (or of any exemplar or cohort) as the game loaded them, after every plugin override: its in-city values and its exemplar. Property names come from `new_properties.xml` when it is next to the DLL or in `%APPDATA%\sc4pimx`. |
+| `snapshot_save` | `name` (default `default`) | Saves a copy of status, budget, demand, taxes, services and utilities to `SC4MCP_snapshots`, so it survives a restart of the game. |
 | `snapshot_compare` | `name`, `min_percent`, `limit` | Only the values that changed since the snapshot (before, after, change, percent), largest first. |
-| `snapshot_list`, `snapshot_delete` | `name` | Manage the snapshots (at most 10, lost when the game closes). |
+| `snapshot_list`, `snapshot_delete` | `name` | Manage the snapshots (at most 30). |
+
+### Modding tools
+
+| Tool | Parameters | Description |
+|---|---|---|
+| `read_resource` | `type`, `group`, `instance` | A resource as the game loaded it: exemplars and cohorts with their own properties, the chain of parent cohorts and the properties inherited from them; LTEXT as text; for other types, whether it exists. |
+| `audit_buildings` | `family` (`school`, `hospital`, `fire`, `police`, `power`) | One row per civic or utility exemplar in the city: capacity, monthly cost, plop cost, radius, cost per unit. Flags the buildings far from the median of their family and those with BSC-style plop costs (less than 3 months of upkeep). |
+| `list_plugins` | `limit` | The Plugins folder: files and bytes by extension, plugin files per top-level folder, every DLL with version, log and ini. |
+| `find_plugin_conflicts` | `type`, `group`, `file_contains`, `limit`, `refresh` | Reads the index of every plugin file and lists the resources defined by more than one file, grouped by file pair: which file wins, which one it overrides, how many resources, an example. The index is kept for 10 minutes. |
+| `find_resource_file` | `type`, `group`, `instance`, `refresh` | Which plugin files define a resource, in load order, and which one the game uses. |
+| `list_cheats` | - | Every cheat code registered now, by the game and by the DLL plugins. |
+
+The load order used by `find_plugin_conflicts` and `find_resource_file` is an estimate (the files of a folder before
+its subfolders, each level in alphabetical order, the later file wins). Many overrides are intended: patches and mods
+placed in late folders on purpose.
 
 ### Control the simulation and the city
 
@@ -107,11 +131,33 @@ SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): 
 | `undo_last_change` | - | Restores the values before the last funding, tax or ordinance change. | `AllowControl=1` |
 | `place_zone` | `zone`, `x1`, `z1`, `x2`, `z2`, `allow_demolition` (bool) | Zones or dezones (`zone=none`) a rectangle of up to 64 x 64 cells. Developed lots are refused unless `allow_demolition=true` (changing their zone demolishes them); plopped buildings are never touched. | `AllowBuild=1` |
 | `run_cheat` | `cheat` | Runs a cheat code as if typed in the Ctrl+X box. | `AllowCheats=1` |
+| `run_scenario` | `steps`, `stop_on_failure`, `dry_run`, `confirm` | Runs a list of steps (a tool with its arguments, `wait_months`, and checks on the results) and returns PASS or FAIL with every step; progress per step; one confirmation for the whole scenario. See [Test scenarios](#test-scenarios). | `AllowControl=1` |
 
 The tools that change the city (`set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `take_loan`,
 `undo_last_change`, `place_zone`, `run_cheat`) accept `dry_run=true` (only describe the change) and, with `ConfirmChanges=1` (default), ask before
 applying: a client that supports MCP elicitation shows the user a confirmation; with other clients the tool returns a
 preview with `confirmation_required` and applies the change only when called again with `confirm=true`.
+
+### Test scenarios
+
+`run_scenario` turns a balance test into a repeatable script. Each step can call a tool, wait some months and check a
+value with a dotted path (`status.funds`, `departments.0.funding_percent`); without a `tool`, a check reads the result
+of its own step.
+
+```json
+{
+  "steps": [
+    { "tool": "snapshot_save", "arguments": { "name": "before" } },
+    { "tool": "set_tax", "arguments": { "type": "residential", "rate": 9 } },
+    { "wait_months": 12, "speed": 4 },
+    { "check": { "tool": "get_city_status", "path": "funds", "op": ">", "value": 0 } },
+    { "check": { "tool": "get_demand", "path": "types.R$.demand", "op": ">", "value": 0 } }
+  ]
+}
+```
+
+Operators: `>`, `>=`, `<`, `<=`, `==`, `!=`, `contains`, `exists`. Steps that change the city are confirmed once,
+before the scenario starts; the result lists every step with the expected and actual value of its check.
 
 Cells are `(x, z)` city cells, as `list_buildings`, `list_lots` and `query_cell` report them. Common occupant groups for
 `list_buildings`: `0x1400` power, `0x1503` schools, `0x1507` health.
@@ -123,6 +169,7 @@ Cells are `(x, z)` city cells, as `list_buildings`, `list_lots` and `query_cell`
 | `sc4://city/status`, `sc4://city/budget`, `sc4://city/demand` | Same as `get_city_status`, `get_budget`, `get_demand`. |
 | `sc4://city/utilities`, `sc4://city/services`, `sc4://city/ordinances` | Same as `get_utilities`, `get_services`, `list_ordinances`. |
 | `sc4://city/transport`, `sc4://city/loans`, `sc4://city/neighbors`, `sc4://city/growth` | Same as `get_transport`, `get_loans`, `get_neighbor_deals`, `diagnose_growth`. |
+| `sc4://log/SC4SIM.log`, `sc4://log/SC4MCP.log` | The last 200 lines of the log. |
 
 Resources can be subscribed to: the server then sends `notifications/resources/updated` for them at every new game
 month (see [Notifications](#notifications)).
@@ -138,7 +185,6 @@ clients that support it) receives, while the game runs:
 - `notifications/resources/updated` for the subscribed resources at every new month.
 
 `logging/setLevel` chooses the lowest level sent (`info` by default; `warning` keeps only the warnings).
-| `sc4://log/SC4SIM.log`, `sc4://log/SC4MCP.log` | The last 200 lines of the log. |
 
 | Prompt | Arguments | What it asks the assistant |
 |---|---|---|
@@ -428,6 +474,8 @@ A typical balance test, as an assistant would run it:
 | `src/ToolsRead.cpp` | Read-only tools (demand, utilities, services, cells, maps, lots, history, ordinances, advisors). |
 | `src/ToolsControl.cpp` | Funding, taxes, ordinances, saving and zoning, with previews for the confirmations. |
 | `src/ToolsDiagnose.cpp` | Growth diagnostics, building properties and snapshots. |
+| `src/ToolsExtra.cpp` | Transport, loans, neighbour deals, map images, change history and undo. |
+| `src/ToolsMore.cpp` | Service locations, CSV export, region, building audit, resources, plugins and overrides, cheats, scenarios. |
 | `src/ToolsCommon.cpp` | Helpers shared by the tool modules (game thread, buildings, advisor data). |
 | `src/McpLog.cpp` | `SC4MCP.log`. |
 
@@ -442,7 +490,8 @@ A typical balance test, as an assistant would run it:
   read-only server, or `Enabled=0` when you do not need it.
 - Every change to the city (speed, funding, taxes, ordinances, zoning, saving, cheats) and every confirmation is
   written to `SC4MCP.log`.
-- `read_log` reads only `.log` files in the Plugins folder.
+- `read_log` reads only `.log` files in the Plugins folder. The plugin tools only read the Plugins folder; files are
+  written only to `SC4MCP_snapshots` and `SC4MCP_exports` next to the DLL.
 
 ## Building from source
 
@@ -484,11 +533,20 @@ All dependencies are vendored in `vendor/`; nothing else needs to be installed.
 Issues and pull requests are welcome. Please:
 
 - keep every game call on the game thread (through `MainThreadQueue`);
-- add new tools to `src/ToolsRead.cpp` or `src/ToolsControl.cpp` with a JSON schema and the right permission, and
+- add new tools to the matching `src/Tools*.cpp` module with a JSON schema and the right permission, and
   document them in this README;
 - test with SimCity 4 1.1.641 and describe the test in the pull request.
 
 ## Changelog
+
+### 1.4.0
+
+- Players: `suggest_location` (where to build schools, hospitals, fire and police stations), `tax_what_if`,
+  `get_region`, `export_csv`, and `render_map highlight`.
+- Modders: `read_resource` (with inherited cohort properties), `audit_buildings`, `list_plugins`,
+  `find_plugin_conflicts`, `find_resource_file`, `list_cheats` and `run_scenario`.
+- Snapshots are saved to disk and survive a restart of the game (at most 30).
+- `get_building_properties` takes property names from `new_properties.xml` when available, and reads cohorts too.
 
 ### 1.3.0
 

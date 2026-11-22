@@ -59,6 +59,7 @@ namespace
 			AddControlTools(all);
 			AddDiagnosticTools(all);
 			AddExtraTools(all);
+			AddMoreTools(all);
 			return all;
 		}();
 		return tools;

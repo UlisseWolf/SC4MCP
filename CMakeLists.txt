@@ -25,6 +25,7 @@ add_library(SC4MCP SHARED
   src/ToolsControl.cpp
   src/ToolsDiagnose.cpp
   src/ToolsExtra.cpp
+  src/ToolsMore.cpp
   src/Events.cpp
   src/ToolsRead.cpp
   ${GZCOM}/src/cRZBaseString.cpp
@@ -33,7 +34,7 @@ add_library(SC4MCP SHARED
   ${GZCOM}/src/cRZCOMDllDirector.cpp
 )
 target_include_directories(SC4MCP PRIVATE src vendor/nlohmann ${GZCOM}/include)
-target_link_libraries(SC4MCP PRIVATE ws2_32)
+target_link_libraries(SC4MCP PRIVATE ws2_32 version)
 target_compile_definitions(SC4MCP PRIVATE WIN32 _WINDOWS _USRDLL NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
 target_compile_options(SC4MCP PRIVATE /W4 /permissive- /utf-8)
 # Static runtime: players do not need to install the Visual C++ redistributable.

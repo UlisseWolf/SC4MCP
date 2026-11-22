@@ -43,7 +43,7 @@
     <Link>
       <SubSystem>Windows</SubSystem>
       <GenerateDebugInformation>true</GenerateDebugInformation>
-      <AdditionalDependencies>ws2_32.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>ws2_32.lib;version.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
@@ -71,6 +71,7 @@
     <ClCompile Include="src\ToolsControl.cpp" />
     <ClCompile Include="src\ToolsDiagnose.cpp" />
     <ClCompile Include="src\ToolsExtra.cpp" />
+    <ClCompile Include="src\ToolsMore.cpp" />
     <ClCompile Include="src\Events.cpp" />
     <ClCompile Include="src\ToolsRead.cpp" />
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZBaseString.cpp">

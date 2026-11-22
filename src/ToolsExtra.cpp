@@ -7,6 +7,10 @@
 #include "cISC4CrimeSimulator.h"
 #include "cISC4FireProtectionSimulator.h"
 #include "cISC4LandValueSimulator.h"
+#include "cISC4Lot.h"
+#include "cISC4LotManager.h"
+#include "cISC4Occupant.h"
+#include "SC4Rect.h"
 #include "cISC4NeighborDeal.h"
 #include "cISC4NeighborsSimulator.h"
 #include "cISC4PoliceSimulator.h"
@@ -328,7 +332,43 @@ namespace
 
 	// ------------------------------------------------------------------------------------------------- map images
 
-	constexpr uint8_t kWater = 0, kNoData = 1, kRampFirst = 2, kRampSteps = 32, kZoneFirst = kRampFirst + kRampSteps;
+	constexpr uint8_t kWater = 0, kNoData = 1, kRampFirst = 2, kRampSteps = 32, kZoneFirst = kRampFirst + kRampSteps, kHighlight = kZoneFirst + 16;
+
+	// Marks the lots that match highlight: abandoned, unpowered, no_road, an occupant group ("0x1503") or
+	// "name:<text>". Returns how many lots were marked, or -1 for an unknown highlight.
+	int Highlight(cISC4City* city, const std::string& what, std::vector<uint8_t>& cells, int32_t sizeX, int32_t sizeZ)
+	{
+		cISC4LotManager* lots = city->GetLotManager();
+		if (!lots) return 0;
+		uint32_t group = 0;
+		std::string needle;
+		if (what.rfind("name:", 0) == 0) needle = Lower(what.substr(5));
+		else if (what != "abandoned" && what != "unpowered" && what != "no_road")
+		{
+			try { group = ParseId(what); } catch (...) { return -1; }
+		}
+		int marked = 0;
+		for (cISC4Occupant* occupant : AllBuildings(city))
+		{
+			cISC4Lot* lot = lots->GetOccupantLot(occupant);
+			if (!lot) continue;
+			bool match = false;
+			const int32_t zone = static_cast<int32_t>(lot->GetZoneType());
+			if (what == "abandoned") match = lot->GetState() == cISC4Lot::HabitationState::Vacant;
+			else if (what == "unpowered") match = lot->GetNeedsPower() && !lot->GetHasPower();
+			else if (what == "no_road") match = zone >= 1 && zone <= 9 && !lot->HasRoadAccess();
+			else if (!needle.empty()) match = Lower(BuildingName(occupant)).find(needle) != std::string::npos;
+			else match = occupant->IsOccupantGroup(group);
+			if (!match) continue;
+			SC4Rect<int32_t> rect{};
+			if (!lot->GetBoundingRect(rect)) continue;
+			for (int32_t x = std::max(0, rect.topLeftX); x <= std::min(sizeX - 1, rect.bottomRightX); ++x)
+				for (int32_t z = std::max(0, rect.topLeftY); z <= std::min(sizeZ - 1, rect.bottomRightY); ++z)
+					cells[static_cast<size_t>(z) * sizeX + x] = kHighlight;
+			++marked;
+		}
+		return marked;
+	}
 
 	uint32_t Mix(uint32_t a, uint32_t b, double t)
 	{
@@ -348,25 +388,8 @@ namespace
 		static const uint32_t zones[16] = { 0xE8E8E8, 0xB7E4C7, 0x52B788, 0x1B7F4F, 0xA9C9F5, 0x4F8FE0, 0x1F5FB8, 0xD4B483,
 			0xF2C94C, 0xE8833A, 0x8A8984, 0x9B6FD1, 0x2A9DB8, 0x5C5C8A, 0x8B5E3C, 0xC94F9B };
 		palette.insert(palette.end(), std::begin(zones), std::end(zones));
+		palette.push_back(0xFF00FF); // highlight
 		return palette;
-	}
-
-	struct ImageMap { const char* name; bool higherIsWorse; std::function<bool(cISC4City*, int32_t, int32_t, double&)> read; };
-
-	const std::vector<ImageMap>& ImageMaps()
-	{
-		static const std::vector<ImageMap> maps = {
-			{ "land_value", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetLandValueSimulator(); if (!s) return false; v = s->GetLandValue(x, z); return true; } },
-			{ "crime", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetCrimeSimulator(); auto* g = s ? s->GetCrimeGrid() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
-			{ "air_pollution", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPollutionSimulator(); int32_t n = 0; if (!s || !s->GetAirValue(x, z, n)) return false; v = n; return true; } },
-			{ "water_pollution", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPollutionSimulator(); int32_t n = 0; if (!s || !s->GetWaterValue(x, z, n)) return false; v = n; return true; } },
-			{ "garbage", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPollutionSimulator(); int32_t n = 0; if (!s || !s->GetGarbageValue(x, z, n)) return false; v = n; return true; } },
-			{ "fire_protection", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetFireProtectionSimulator(); auto* g = s ? s->GetFireProtectionGrid() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
-			{ "police_coverage", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPoliceSimulator(); auto* g = s ? s->GetPolicePowerGrid() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
-			{ "congestion", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetTrafficSimulator(); auto* g = s ? s->GetCongestionMap() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
-			{ "powered", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPowerSimulator(); if (!s) return false; v = s->IsPowered(x, z) ? 1 : 0; return true; } },
-		};
-		return maps;
 	}
 
 	json RenderMap(const json& arguments)
@@ -405,12 +428,11 @@ namespace
 		}
 		else
 		{
-			const ImageMap* map = nullptr;
-			for (const ImageMap& candidate : ImageMaps()) if (name == candidate.name) map = &candidate;
+			const MapReader* map = FindMapReader(name);
 			if (!map)
 			{
 				json names = json::array({ "zones" });
-				for (const ImageMap& candidate : ImageMaps()) names.push_back(candidate.name);
+				for (const MapReader& candidate : MapReaders()) names.push_back(candidate.name);
 				return json{ {"error", "Unknown map."}, {"maps", names} };
 			}
 			std::vector<double> values(cellsIndex.size(), std::nan(""));
@@ -442,6 +464,14 @@ namespace
 			out["max"] = maximum;
 			out["range"] = json{ {"low", low}, {"high", high} };
 			legend.push_back(json{ {"color", "green to red"}, {"meaning", map->higherIsWorse ? "low (good) to high (bad)" : "high (good) to low (bad)"} });
+		}
+		if (arguments.contains("highlight") && arguments["highlight"].is_string())
+		{
+			const std::string what = Lower(arguments["highlight"].get<std::string>());
+			const int marked = Highlight(city, what, cellsIndex, sizeX, sizeZ);
+			if (marked < 0) return Error("highlight must be abandoned, unpowered, no_road, an occupant group (e.g. 0x1503) or name:<text>.");
+			out["highlighted_lots"] = marked;
+			legend.push_back(json{ {"color", "#FF00FF"}, {"meaning", "highlighted: " + what} });
 		}
 		legend.push_back(json{ {"color", "#3A7BD5"}, {"meaning", "water"} });
 		legend.push_back(json{ {"color", "#D8D8D8"}, {"meaning", "no data"} });
@@ -536,7 +566,8 @@ namespace ToolsCommon
 
 		tools.push_back({ "render_map",
 			"Draws a city map as a PNG image (returned as an image the assistant can look at): zones, land_value, crime, air_pollution, water_pollution, garbage, fire_protection, police_coverage, congestion or powered. Green is good, red is bad; water is blue. scale: pixels per cell (default so the image is about 512 pixels). fixed_range=false stretches the colours to the values present.",
-			Schema({ {"map", {{"type", "string"}}}, {"scale", {{"type", "integer"}, {"minimum", 1}, {"maximum", 8}}}, {"fixed_range", {{"type", "boolean"}}} }, json::array({ "map" })), Permission::Read,
+			Schema({ {"map", {{"type", "string"}}}, {"scale", {{"type", "integer"}, {"minimum", 1}, {"maximum", 8}}}, {"fixed_range", {{"type", "boolean"}}},
+				{"highlight", {{"type", "string"}, {"description", "Mark lots in magenta: abandoned, unpowered, no_road, an occupant group (e.g. \"0x1503\" schools) or name:<text>."}}} }, json::array({ "map" })), Permission::Read,
 			GameThread([](const json& arguments) { return RenderMap(arguments); }) });
 
 		tools.push_back({ "list_changes",

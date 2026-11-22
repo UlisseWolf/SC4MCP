@@ -1,5 +1,7 @@
 // SC4MCP - helpers shared by the tool modules.
 #include "ToolsCommon.h"
+
+#include <windows.h>
 #include "MainThreadQueue.h"
 
 #include "cIGZString.h"
@@ -15,6 +17,15 @@
 #include "cISC4OccupantFilter.h"
 #include "cISC4OccupantManager.h"
 #include "cISC4Simulator.h"
+#include "cISC4CrimeSimulator.h"
+#include "cISC4FireProtectionSimulator.h"
+#include "cISC4LandValueSimulator.h"
+#include "cISC4PoliceSimulator.h"
+#include "cISC4PollutionSimulator.h"
+#include "cISC4PowerSimulator.h"
+#include "cISC4SimGrid.h"
+#include "cISC4TrafficSimulator.h"
+#include "McpLog.h"
 #include "cISCLua.h"
 #include "cISCPropertyHolder.h"
 #include "cRZAutoRefCount.h"
@@ -31,6 +42,11 @@
 #include <cstdio>
 #include <stdexcept>
 #include <unordered_set>
+#include <filesystem>
+#include <fstream>
+#include <mutex>
+#include <sstream>
+#include <unordered_map>
 
 using nlohmann::json;
 
@@ -372,5 +388,105 @@ namespace ToolsCommon
 		cRZAutoRefCount<cIGZString> text;
 		if (StringResourceManager::GetLocalizedString(StringResourceKey(group, instance), text) && text) return text->ToChar();
 		return {};
+	}
+
+	const std::vector<MapReader>& MapReaders()
+	{
+		static const std::vector<MapReader> maps = {
+			{ "land_value", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetLandValueSimulator(); if (!s) return false; v = s->GetLandValue(x, z); return true; } },
+			{ "crime", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetCrimeSimulator(); auto* g = s ? s->GetCrimeGrid() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
+			{ "air_pollution", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPollutionSimulator(); int32_t n = 0; if (!s || !s->GetAirValue(x, z, n)) return false; v = n; return true; } },
+			{ "water_pollution", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPollutionSimulator(); int32_t n = 0; if (!s || !s->GetWaterValue(x, z, n)) return false; v = n; return true; } },
+			{ "garbage", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPollutionSimulator(); int32_t n = 0; if (!s || !s->GetGarbageValue(x, z, n)) return false; v = n; return true; } },
+			{ "fire_protection", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetFireProtectionSimulator(); auto* g = s ? s->GetFireProtectionGrid() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
+			{ "police_coverage", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPoliceSimulator(); auto* g = s ? s->GetPolicePowerGrid() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
+			{ "congestion", true, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetTrafficSimulator(); auto* g = s ? s->GetCongestionMap() : nullptr; if (!g) return false; v = g->GetCellValue(x, z); return true; } },
+			{ "powered", false, [](cISC4City* c, int32_t x, int32_t z, double& v) { auto* s = c->GetPowerSimulator(); if (!s) return false; v = s->IsPowered(x, z) ? 1 : 0; return true; } },
+		};
+		return maps;
+	}
+
+	const MapReader* FindMapReader(const std::string& name)
+	{
+		for (const MapReader& map : MapReaders()) if (name == map.name) return &map;
+		return nullptr;
+	}
+
+	namespace
+	{
+		std::once_flag propertiesOnce;
+		std::unordered_map<uint32_t, std::pair<std::string, std::string>> propertyNames;
+		std::string propertiesFile;
+
+		std::string Attribute(const std::string& tag, const char* key)
+		{
+			const std::string needle = std::string(key) + "=\"";
+			const size_t at = tag.find(needle);
+			if (at == std::string::npos) return {};
+			const size_t start = at + needle.size();
+			const size_t end = tag.find('"', start);
+			return end == std::string::npos ? std::string() : tag.substr(start, end - start);
+		}
+
+		void LoadProperties()
+		{
+			std::vector<std::filesystem::path> candidates = { McpLog::DllFolder() / L"new_properties.xml" };
+			wchar_t appData[MAX_PATH]{};
+			if (GetEnvironmentVariableW(L"APPDATA", appData, MAX_PATH) > 0) candidates.push_back(std::filesystem::path(appData) / L"sc4pimx" / L"new_properties.xml");
+			for (const auto& path : candidates)
+			{
+				std::ifstream file(path, std::ios::binary);
+				if (!file) continue;
+				std::stringstream buffer;
+				buffer << file.rdbuf();
+				const std::string text = buffer.str();
+				size_t at = 0;
+				while ((at = text.find("<property ", at)) != std::string::npos)
+				{
+					const size_t end = text.find('>', at);
+					if (end == std::string::npos) break;
+					const std::string tag = text.substr(at, end - at);
+					at = end;
+					const std::string num = Attribute(tag, "num");
+					if (num.empty()) continue;
+					try
+					{
+						const uint32_t id = static_cast<uint32_t>(std::stoul(num, nullptr, 0));
+						propertyNames.emplace(id, std::make_pair(Attribute(tag, "name"), Attribute(tag, "type")));
+					}
+					catch (...) {}
+				}
+				if (!propertyNames.empty())
+				{
+					propertiesFile = path.string();
+					McpLog::Write("Property names: %u read from %s", static_cast<unsigned>(propertyNames.size()), propertiesFile.c_str());
+					return;
+				}
+			}
+		}
+	}
+
+	bool PropertyInfo(uint32_t id, std::string& name, std::string& type)
+	{
+		std::call_once(propertiesOnce, LoadProperties);
+		const auto found = propertyNames.find(id);
+		if (found == propertyNames.end()) return false;
+		name = found->second.first;
+		type = found->second.second;
+		return true;
+	}
+
+	std::string PropertiesFileUsed()
+	{
+		std::call_once(propertiesOnce, LoadProperties);
+		return propertiesFile;
+	}
+
+	std::string DataFolder(const char* sub)
+	{
+		const std::filesystem::path folder = McpLog::DllFolder() / sub;
+		std::error_code error;
+		std::filesystem::create_directories(folder, error);
+		return folder.string();
 	}
 }

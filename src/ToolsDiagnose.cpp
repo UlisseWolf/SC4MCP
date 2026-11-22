@@ -29,6 +29,7 @@
 #include "cISCProperty.h"
 #include "cISCPropertyHolder.h"
 #include "cISCResExemplar.h"
+#include "cISCResExemplarCohort.h"
 #include "cGZPersistResourceKey.h"
 #include "cRZAutoRefCount.h"
 #include "cRZBaseString.h"
@@ -41,6 +42,9 @@
 #include <map>
 #include <mutex>
 #include <set>
+#include <cctype>
+#include <filesystem>
+#include <fstream>
 
 using nlohmann::json;
 using namespace ToolsCommon;
@@ -414,7 +418,9 @@ namespace
 			if (!properties->GetElement(static_cast<uint32_t>(i), GZIID_cISCProperty, reinterpret_cast<void**>(&property)) || !property) continue;
 			const uint32_t id = property->GetPropertyID();
 			json entry{ {"id", Hex(id)}, {"value", VariantValue(property->GetPropertyValue())} };
-			if (const char* name = PropertyName(id)) entry["name"] = name;
+			std::string xmlName, xmlType;
+			if (PropertyInfo(id, xmlName, xmlType) && !xmlName.empty()) entry["name"] = xmlName;
+			else if (const char* name = PropertyName(id)) entry["name"] = name;
 			list.push_back(entry);
 			property->Release();
 		}
@@ -429,6 +435,13 @@ namespace
 		cRZAutoRefCount<cISCResExemplar> exemplar;
 		if (!resources || !resources->GetResource(key, GZIID_cISCResExemplar, exemplar.AsPPVoid(), 0, nullptr) || !exemplar)
 		{
+			// Cohorts are loaded as cohort resources, not exemplars.
+			cRZAutoRefCount<cISCResExemplarCohort> cohort;
+			if (resources && resources->GetResource(key, GZIID_cISCResExemplarCohort, cohort.AsPPVoid(), 0, nullptr) && cohort)
+			{
+				return json{ {"key", json{ {"type", Hex(key.type)}, {"group", Hex(key.group)}, {"instance", Hex(key.instance)} }},
+					{"properties", PropertyList(cohort->AsISCPropertyHolder())} };
+			}
 			return Error("No exemplar " + Hex(key.type) + " / " + Hex(key.group) + " / " + Hex(key.instance) + ".");
 		}
 		return json{ {"key", json{ {"type", Hex(key.type)}, {"group", Hex(key.group)}, {"instance", Hex(key.instance)} }},
@@ -475,6 +488,8 @@ namespace
 		{
 			out["exemplar_file"] = Error("The game has no exemplar for this building ID.");
 		}
+		const std::string namesFile = PropertiesFileUsed();
+		out["property_names_from"] = namesFile.empty() ? std::string("built-in list (put new_properties.xml next to SC4MCP.dll for every name)") : namesFile;
 		out["note"] = "in_city_properties are the values of this building as the game holds them; exemplar_file has the properties of the exemplar the game loaded (after every plugin override). Inherited cohort properties are not repeated.";
 		return out;
 	}
@@ -489,6 +504,50 @@ namespace
 	std::mutex snapshotMutex;
 	std::map<std::string, Snapshot> snapshots;
 	constexpr size_t kMaxSnapshots = 10;
+
+	// Snapshots are also saved as JSON files in SC4MCP_snapshots next to the DLL, so they survive a restart.
+	std::string SafeName(const std::string& name)
+	{
+		std::string out;
+		for (char c : name) out += (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_') ? c : '_';
+		return out.empty() ? std::string("default") : out.substr(0, 64);
+	}
+
+	std::filesystem::path SnapshotFile(const std::string& name)
+	{
+		return std::filesystem::path(DataFolder("SC4MCP_snapshots")) / (SafeName(name) + ".json");
+	}
+
+	void WriteSnapshotFile(const std::string& name, const Snapshot& snapshot)
+	{
+		std::ofstream file(SnapshotFile(name), std::ios::binary | std::ios::trunc);
+		if (file) file << json{ {"name", name}, {"saved_at", snapshot.created}, {"data", snapshot.data} }.dump();
+	}
+
+	bool ReadSnapshotFile(const std::filesystem::path& path, std::string& name, Snapshot& snapshot)
+	{
+		std::ifstream file(path, std::ios::binary);
+		if (!file) return false;
+		json content = json::parse(file, nullptr, false);
+		if (content.is_discarded() || !content.contains("data")) return false;
+		name = content.value("name", path.stem().string());
+		snapshot.data = content["data"];
+		snapshot.created = content.value("saved_at", std::string());
+		return true;
+	}
+
+	// Loads the snapshot files not yet in memory (called with snapshotMutex held).
+	void LoadSnapshotFiles()
+	{
+		std::error_code error;
+		for (const auto& entry : std::filesystem::directory_iterator(DataFolder("SC4MCP_snapshots"), error))
+		{
+			if (entry.path().extension() != ".json") continue;
+			std::string name;
+			Snapshot snapshot;
+			if (ReadSnapshotFile(entry.path(), name, snapshot) && !snapshots.count(name)) snapshots[name] = snapshot;
+		}
+	}
 
 	// Flattens the numbers of a JSON value into path -> value. Array elements are keyed by their id, line, name or
 	// type field when they have one, so departments and lines match between snapshots.
@@ -561,12 +620,15 @@ namespace
 		json data = CollectSnapshot(isError);
 		if (isError) return data;
 		std::lock_guard<std::mutex> lock(snapshotMutex);
-		if (snapshots.size() >= kMaxSnapshots && !snapshots.count(name)) return Error("At most 10 snapshots: delete one with snapshot_delete.");
+		LoadSnapshotFiles();
+		if (snapshots.size() >= kMaxSnapshots * 3 && !snapshots.count(name)) return Error("At most 30 snapshots: delete one with snapshot_delete.");
 		snapshots[name] = { data, Now() };
+		WriteSnapshotFile(name, snapshots[name]);
 		std::map<std::string, double> values;
 		Flatten(data, "", values);
 		return json{ {"saved", name}, {"game_date", data["get_city_status"].value("date", json::object()).value("text", std::string())},
-			{"values", values.size()}, {"note", "Use snapshot_compare with this name after changes or wait_months."} };
+			{"values", values.size()}, {"file", SnapshotFile(name).string()},
+			{"note", "Use snapshot_compare with this name after changes or wait_months; the file keeps it after a restart."} };
 	}
 
 	json SnapshotCompare(const json& arguments, bool& isError)
@@ -577,6 +639,7 @@ namespace
 		Snapshot before;
 		{
 			std::lock_guard<std::mutex> lock(snapshotMutex);
+			LoadSnapshotFiles();
 			const auto found = snapshots.find(name);
 			if (found == snapshots.end()) { isError = true; return Error("No snapshot named " + name + " (snapshot_list lists them)."); }
 			before = found->second;
@@ -617,13 +680,15 @@ namespace
 	json SnapshotList()
 	{
 		std::lock_guard<std::mutex> lock(snapshotMutex);
+		LoadSnapshotFiles();
 		json list = json::array();
 		for (const auto& [name, snapshot] : snapshots)
 		{
 			list.push_back(json{ {"name", name}, {"saved_at", snapshot.created},
 				{"game_date", snapshot.data.value("get_city_status", json::object()).value("date", json::object()).value("text", std::string())} });
 		}
-		return json{ {"snapshots", list}, {"note", "Snapshots live in memory and are lost when the game closes."} };
+		return json{ {"snapshots", list}, {"folder", DataFolder("SC4MCP_snapshots")},
+			{"note", "Snapshots are saved as JSON files next to the DLL and survive a restart. Compare only snapshots of the same city."} };
 	}
 }
 
@@ -647,7 +712,7 @@ namespace ToolsCommon
 			GameThread([](const json& arguments) { return GetBuildingProperties(arguments); }) });
 
 		tools.push_back({ "snapshot_save",
-			"Saves a snapshot of the main city figures (status, budget, demand, taxes, services, utilities) under a name (default \"default\"), to compare later with snapshot_compare.",
+			"Saves a snapshot of the main city figures (status, budget, demand, taxes, services, utilities) under a name (default \"default\"), to compare later with snapshot_compare. Snapshots are also written to disk and survive a restart.",
 			Schema({ {"name", {{"type", "string"}}} }), Permission::Read,
 			[](const json& arguments, bool& isError, const Tools::Context&) { return SnapshotSave(arguments, isError); } });
 
@@ -667,8 +732,11 @@ namespace ToolsCommon
 			[](const json& arguments, bool& isError, const Tools::Context&) -> json
 			{
 				std::lock_guard<std::mutex> lock(snapshotMutex);
+				LoadSnapshotFiles();
 				const std::string name = arguments.at("name").get<std::string>();
 				if (!snapshots.erase(name)) { isError = true; return Error("No snapshot named " + name + "."); }
+				std::error_code error;
+				std::filesystem::remove(SnapshotFile(name), error);
 				return json{ {"deleted", name} };
 			} });
 	}

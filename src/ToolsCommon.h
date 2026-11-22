@@ -43,6 +43,7 @@ namespace ToolsCommon
 	void AddControlTools(std::vector<ToolDef>& tools);
 	void AddDiagnosticTools(std::vector<ToolDef>& tools);
 	void AddExtraTools(std::vector<ToolDef>& tools);
+	void AddMoreTools(std::vector<ToolDef>& tools);
 
 	// Changes made by the tools, newest last, with the calls that undo them (undo_last_change).
 	void RecordChange(const std::string& description, json undoCalls);
@@ -125,6 +126,24 @@ namespace ToolsCommon
 	bool ReadGameTable(cISC4City* city, GameTable& out);
 	// Fields whose name contains any of the words (lower case); all fields when words is empty.
 	json GameFields(const GameTable& table, const std::vector<std::string>& words);
+
+	// City maps read cell by cell: land_value, crime, air_pollution, water_pollution, garbage, fire_protection,
+	// police_coverage, congestion, powered.
+	struct MapReader
+	{
+		const char* name;
+		bool higherIsWorse;
+		std::function<bool(cISC4City*, int32_t, int32_t, double&)> read;
+	};
+	const std::vector<MapReader>& MapReaders();
+	const MapReader* FindMapReader(const std::string& name);
+
+	// Name and type of a property from new_properties.xml (next to the DLL or in %APPDATA%\sc4pimx), if found.
+	bool PropertyInfo(uint32_t id, std::string& name, std::string& type);
+	std::string PropertiesFileUsed();
+
+	// Folder of SC4MCP's own files (snapshots, exports), created next to the DLL.
+	std::string DataFolder(const char* sub);
 
 	// Localized LTEXT, or an empty string.
 	std::string LocalizedText(uint32_t group, uint32_t instance);

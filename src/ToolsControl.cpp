@@ -26,6 +26,7 @@
 #include <cmath>
 #include <cstdio>
 #include <set>
+#include <map>
 
 using nlohmann::json;
 using namespace ToolsCommon;
@@ -212,6 +213,63 @@ namespace
 		if (changes.empty()) return Error("Unknown tax type. Use one of r_low, r_medium, r_high, cs_low, cs_medium, cs_high, co_medium, co_high, i_agriculture, i_dirty, i_manufacturing, i_hightech, residential, commercial, industrial or all.");
 		json out{ {"action", "set_tax"}, {"rate", rate}, {"changes", changes} };
 		if (cISC4DemandSimulator* demand = city->GetDemandSimulator()) out["neutral_tax_rate"] = demand->GetNeutralTaxRate();
+		return out;
+	}
+
+	// Estimates the monthly tax income at other rates: income of a tax type ~ its weighted assessed value x its rate,
+	// scaled so that the current rates give the current monthly tax income of the advisor data.
+	json TaxWhatIf(const json& arguments)
+	{
+		cISC4City* city = City();
+		if (!city) return NoCity();
+		cISC4BudgetSimulator* budget = city->GetBudgetSimulator();
+		GameTable table;
+		if (!budget || !ReadGameTable(city, table)) return Error("The advisor data table is not available yet (let one month pass).");
+		uint32_t groups[12]{};
+		if (!FindTaxGroups(budget, table, groups)) return Error("Could not identify the game's tax groups.");
+
+		std::map<std::string, double> newRates;
+		if (arguments.contains("rates") && arguments["rates"].is_object())
+		{
+			for (auto it = arguments["rates"].begin(); it != arguments["rates"].end(); ++it) if (it.value().is_number()) newRates[Lower(it.key())] = it.value().get<double>();
+		}
+		if (arguments.contains("type") && arguments.contains("rate")) newRates[Lower(arguments["type"].get<std::string>())] = arguments["rate"].get<double>();
+		if (newRates.empty()) return Error("Give type and rate, or rates: {\"r_low\": 8, \"industrial\": 10, ...}.");
+
+		double weighted = 0.0;
+		double current[12]{}, assessed[12]{}, proposed[12]{};
+		for (int i = 0; i < 12; ++i)
+		{
+			current[i] = budget->GetTaxRate(groups[i]);
+			assessed[i] = static_cast<double>(budget->GetWeightedAssessedTaxValue(groups[i]));
+			proposed[i] = current[i];
+			for (const auto& [type, rate] : newRates) if (TaxMatches(type, kTaxes[i].name)) proposed[i] = std::round(std::clamp(rate, 0.0, 20.0) * 10.0) / 10.0;
+			weighted += assessed[i] * current[i];
+		}
+		const auto income = table.numbers.find("g_tax_income");
+		const double monthlyTax = income != table.numbers.end() ? income->second : 0.0;
+		const double k = weighted > 0.0 && monthlyTax > 0.0 ? monthlyTax / weighted : 0.0;
+		cISC4DemandSimulator* demand = city->GetDemandSimulator();
+		const double neutral = demand ? demand->GetNeutralTaxRate() : 0.0;
+		json types = json::array();
+		double totalNow = 0.0, totalNew = 0.0;
+		for (int i = 0; i < 12; ++i)
+		{
+			const double now = assessed[i] * current[i] * k, then = assessed[i] * proposed[i] * k;
+			totalNow += now;
+			totalNew += then;
+			if (proposed[i] == current[i]) continue;
+			json t{ {"type", kTaxes[i].name}, {"current_rate", current[i]}, {"new_rate", proposed[i]}, {"assessed_value", assessed[i]},
+				{"monthly_income_now", std::round(now)}, {"monthly_income_new", std::round(then)}, {"change", std::round(then - now)} };
+			if (proposed[i] > neutral + 0.05) t["demand_effect"] = "above the neutral rate: lowers the demand of this type";
+			else if (proposed[i] < current[i]) t["demand_effect"] = "lower rate: raises the demand of this type";
+			types.push_back(t);
+		}
+		json out{ {"changes", types}, {"monthly_tax_income_now", std::round(totalNow)}, {"monthly_tax_income_new", std::round(totalNew)},
+			{"monthly_change", std::round(totalNew - totalNow)}, {"neutral_tax_rate", neutral} };
+		out["note"] = k > 0.0
+			? "Estimate at the current population: income per type = assessed value x rate, scaled to the current monthly tax income. It ignores how the demand, and with it the population, will react."
+			: "No current tax income in the advisor data: only the relative change (assessed value x rate) is meaningful.";
 		return out;
 	}
 
@@ -462,6 +520,11 @@ namespace ToolsCommon
 		tools.push_back({ "get_taxes",
 			"The twelve tax rates (percent) of the city, as the budget window shows them.",
 			Schema(json::object()), Permission::Read, GameThread([](const json&) { return GetTaxes(); }) });
+
+		tools.push_back({ "tax_what_if",
+			"Estimates the monthly tax income with other tax rates, without changing anything: give type and rate, or rates as an object (e.g. {\"r_low\": 8, \"industrial\": 10}); types as in set_tax. Also says which rates would be above the neutral rate (lower demand).",
+			Schema({ {"type", {{"type", "string"}}}, {"rate", {{"type", "number"}, {"minimum", 0}, {"maximum", 20}}}, {"rates", {{"type", "object"}}} }), Permission::Read,
+			GameThread([](const json& arguments) { return TaxWhatIf(arguments); }) });
 
 		tools.push_back({ "set_funding",
 			"Sets the funding slider of a budget department (department ID from get_budget) to a percentage (0 up to the department maximum, usually 120). Asks for confirmation; dry_run=true only previews.",

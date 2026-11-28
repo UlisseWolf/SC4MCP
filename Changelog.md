@@ -18,6 +18,10 @@ All notable changes to SC4MCP are listed here, newest first. Versions follow
 - New setting `AllowDangerousCommands` (default `0`) for quitting, scripts, browser, files at any path and window
   commands; `CreateException` is never run. `ReadOnly=1` turns it off too.
 - `run_scenario` confirms the new tools that change the city once, like the others.
+- From an analysis of the 1.1.641 executable: `place_flora` uses the flora simulator directly, because the game's
+  `PlaceFlora` command loses the z coordinate; `take_snapshot` passes x, y, width and height (the command does
+  nothing without a size) and takes the size of the game window by default; the command status is reported as
+  `return_code`/`ok` and removed from the parsed values.
 
 ## 1.4.0
 

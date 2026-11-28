@@ -17,6 +17,7 @@
 #include "cIGZCommandParameterSet.h"
 #include "cIGZCommandServer.h"
 #include "cIGZVariant.h"
+#include "cISC4FloraSimulator.h"
 #include "cISC4App.h"
 #include "cISC4City.h"
 #include "cISC4Lot.h"
@@ -40,6 +41,10 @@
 #include <fstream>
 #include <set>
 #include <thread>
+
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 using nlohmann::json;
 using namespace ToolsCommon;
@@ -121,7 +126,7 @@ namespace
 			{ "SetGZLogLevel", C::Read, "app", "Unimplemented in retail builds." },
 			{ "SetPopupModalDialogsEnabled", C::Control, "app", "Enables or disables popup modal dialogs: SetPopupModalDialogsEnabled <bool>." },
 			{ "SetScriptAutoYield", C::Dangerous, "app", "Test-script auto yield; meaningless outside a Lua script." },
-			{ "TakeSnapshot", C::Dangerous, "app", "Screenshot to any path (take_snapshot writes to SC4MCP_screenshots)." },
+			{ "TakeSnapshot", C::Dangerous, "app", "Screenshot to any path: TakeSnapshot <file> <x> <y> <width> <height> (width and height are required; format from the extension). take_snapshot writes to SC4MCP_screenshots." },
 			{ "ViewWebBrowser", C::Dangerous, "app", "Opens a web browser at a URL." },
 			{ "WaitForMessage2", C::Dangerous, "app", "Test-script message wait; meaningless outside a Lua script." },
 			{ "WriteRegistry", C::Dangerous, "app", "Unimplemented in retail builds." },
@@ -177,7 +182,7 @@ namespace
 			{ "OpenSnapshotDialog", C::Modal, "city", "Opens the snapshot dialog." },
 			{ "PauseAnimation", C::View, "city", "Pauses the animations." },
 			{ "PlaceBuilding", C::Build, "city", "Places a building: PlaceBuilding <building id> <x> <z> (world position)." },
-			{ "PlaceFlora", C::Build, "city", "Places flora: PlaceFlora <flora id> <x> <z> (world position)." },
+			{ "PlaceFlora", C::Build, "city", "Broken in 1.1.641: the handler puts its z argument in the altitude and z = -1, off the map. place_flora calls the flora simulator directly." },
 			{ "PlaceLotTool", C::View, "city", "Selects the place-lot tool for a lot: PlaceLotTool <lot IID>." },
 			{ "QuitCity", C::Dangerous, "city", "Exits to the region: QuitCity <show confirmation>." },
 			{ "QuitGame", C::Dangerous, "app", "Exits the game." },
@@ -209,9 +214,9 @@ namespace
 			{ "ToggleTerrainContourDisplay", C::View, "city", "Shows or hides the terrain contours." },
 			{ "ToggleUIVisibility", C::View, "city", "Shows or hides the user interface." },
 			{ "ToxicSpill", C::Build, "city", "Starts a toxic spill disaster." },
-			{ "Zoom0", C::View, "city", "Zoom level 0." }, { "Zoom1", C::View, "city", "Zoom level 1." },
+			{ "Zoom0", C::View, "city", "Zoom level 0 (farthest)." }, { "Zoom1", C::View, "city", "Zoom level 1." },
 			{ "Zoom2", C::View, "city", "Zoom level 2." }, { "Zoom3", C::View, "city", "Zoom level 3." },
-			{ "Zoom4", C::View, "city", "Zoom level 4." }, { "Zoom5", C::View, "city", "Zoom level 5." },
+			{ "Zoom4", C::View, "city", "Zoom level 4." }, { "Zoom5", C::View, "city", "Zoom level 5 (closest)." },
 			{ "ZoomIn", C::View, "city", "Zooms in." },
 			{ "ZoomOut", C::View, "city", "Zooms out." },
 			// ---- Region
@@ -368,52 +373,58 @@ namespace
 			return Error(message);
 		}
 
-		// The input parameter set is created here and filled by ConvertStringToCommand; if the server hands back a
-		// different set, both are released.
-		cIGZCommandParameterSet* created = nullptr;
-		if (!server->CreateCommandParameterSet(&created) || !created) return Error("Could not create a command parameter set.");
-		cIGZCommandParameterSet* input = created;
+		// Same sequence as the game's own string ExecuteCommand (0x00929994 in 1.1.641): ConvertStringToCommand
+		// splits the line on spaces and tabs (a "quoted string" stays one parameter, without its quotes; no escapes),
+		// looks up the command by its first word, and always allocates a new parameter set (reference count 1) with
+		// the remaining words as string variants under IDs 0..n-1; it overwrites the pointer it is given, so it is
+		// passed null and released once here. The variants convert on demand: t/f/true/false, 0x hex, decimal,
+		// negative and floating-point numbers are all accepted.
+		cIGZCommandParameterSet* input = nullptr;
 		uint32_t id = 0;
-		const bool parsed = server->ConvertStringToCommand(line.c_str(), length, id, input);
-		auto releaseInput = [&]
+		if (!server->ConvertStringToCommand(line.c_str(), length, id, input) || id == 0 || !input)
 		{
-			if (input && input != created) input->Release();
-			created->Release();
-		};
-		if (!parsed || id == 0)
-		{
-			releaseInput();
-			return Error("The game could not parse the parameters of \"" + name + "\".");
+			if (input) input->Release();
+			return Error("The game could not parse the command line \"" + line + "\".");
 		}
 
 		cIGZCommandParameterSet* output = nullptr;
 		if (!server->CreateCommandParameterSet(&output) || !output)
 		{
-			releaseInput();
+			input->Release();
 			return Error("Could not create a command parameter set.");
 		}
 
+		// The dispatcher sends the command as a synchronous message and returns the status parameter of the output
+		// (0x2B999D2B); when the handler sets none, it sets 0. Handlers set 2 when they fail; a few commands use the
+		// status as their answer (GZWinIsWindowPresent: 0 = present).
 		const int32_t returnCode = server->ExecuteCommand(id, input, output);
 
-		json out{ {"command", line}, {"id", Hex(id)}, {"return_code", returnCode} };
-		if (cIGZVariant* status = output->GetParameter(cIGZCommandParameterSet::kStatusParameterID))
+		json out{ {"command", line}, {"id", Hex(id)}, {"return_code", returnCode}, {"ok", returnCode == 0} };
+		bool hasStatus = false;
+		if (cIGZVariant* status = output->GetParameter(cIGZCommandParameterSet::kStatusParameterID)) // null when absent
 		{
 			int32_t value = 0;
 			if (status->GetValSint32(value)) out["status"] = value;
+			hasStatus = true;
 		}
+		// The output text lists every output parameter in ID order, joined by spaces (values with spaces are quoted).
+		// The status parameter has the highest ID, so it is the last value ("GetAppState" answers "1 0"): it is
+		// reported as status and removed from values.
 		cRZBaseString text;
+		json values = json::array();
 		if (server->ConvertCommandOutputToString(output, text) && text.Strlen() > 0)
 		{
 			out["output"] = text.ToChar();
-			out["values"] = ParseOutput(text.ToChar());
+			values = ParseOutput(text.ToChar());
+			if (hasStatus && !values.empty()) values.erase(values.size() - 1);
 		}
 		else
 		{
 			out["output"] = "";
-			out["values"] = json::array();
 		}
+		out["values"] = values;
 		output->Release();
-		releaseInput();
+		input->Release();
 		McpLog::Write("game command: %s -> %d", line.c_str(), returnCode);
 		return out;
 	}
@@ -838,10 +849,29 @@ namespace
 		const uint32_t id = ParseId(arguments.at("flora"));
 		const int32_t x = arguments.at("x").get<int32_t>(), z = arguments.at("z").get<int32_t>();
 		if (!InCity(city, x, z)) return Error("The cell is outside the city.");
+		cISC4FloraSimulator* flora = city->GetFloraSimulator();
+		if (!flora) return Error("Flora simulator unavailable.");
+		if (!flora->IsFloraTypeValid(id)) return Error("No flora type " + Hex(id) + " is loaded.");
 		// World positions are in metres; a city cell is 16 m. The flora goes at the centre of the cell.
 		const double wx = x * 16.0 + 8.0, wz = z * 16.0 + 8.0;
-		return json{ {"action", "place_flora"}, {"flora", Hex(id)}, {"x", x}, {"z", z}, {"world_x", wx}, {"world_z", wz},
-			{"command", "PlaceFlora " + std::to_string(id) + " " + Num(wx) + " " + Num(wz)} };
+		return json{ {"action", "place_flora"}, {"flora", Hex(id)}, {"x", x}, {"z", z}, {"world_x", wx}, {"world_z", wz} };
+	}
+
+	// The PlaceFlora game command is broken in 1.1.641 (handler at 0x006B3497 builds the position as
+	// {x, z, -1.0}, while the flora simulator reads {x, y, z} with y <= 0 meaning "on the terrain"), so the flora is
+	// added through cISC4FloraSimulator::AddNewFloraOccupant with the position the simulator expects.
+	json ApplyFlora(const json& arguments)
+	{
+		json plan = PlanFlora(arguments);
+		if (plan.contains("error")) return plan;
+		cISC4FloraSimulator* flora = City()->GetFloraSimulator();
+		float position[3] = { plan["world_x"].get<float>(), -1.0f, plan["world_z"].get<float>() };
+		cISC4Occupant* occupant = flora->AddNewFloraOccupant(ParseId(arguments.at("flora")), position, false);
+		McpLog::Write("place_flora: %s at (%d, %d) %s", plan["flora"].get<std::string>().c_str(), plan["x"].get<int>(), plan["z"].get<int>(), occupant ? "placed" : "refused");
+		if (!occupant) return Error("The flora simulator refused the place (water, a lot or a network on the cell?).");
+		RecordChange("Place flora " + plan["flora"].get<std::string>() + " at (" + std::to_string(plan["x"].get<int>()) + ", " + std::to_string(plan["z"].get<int>()) + ")", json::array());
+		plan["applied"] = true;
+		return plan;
 	}
 
 	// ------------------------------------------------------------------------------------------------- city info
@@ -938,6 +968,32 @@ namespace
 
 	// ------------------------------------------------------------------------------------------------- snapshot
 
+	// Client size of the game's main window: the largest visible top-level window of this process.
+	bool GameWindowSize(int32_t& width, int32_t& height)
+	{
+#ifdef _WIN32
+		struct Finder { DWORD process; LONG area; LONG width; LONG height; } finder{ GetCurrentProcessId(), 0, 0, 0 };
+		EnumWindows([](HWND window, LPARAM parameter) -> BOOL
+		{
+			Finder& f = *reinterpret_cast<Finder*>(parameter);
+			DWORD process = 0;
+			GetWindowThreadProcessId(window, &process);
+			if (process != f.process || !IsWindowVisible(window) || GetWindow(window, GW_OWNER)) return TRUE;
+			RECT rect{};
+			if (!GetClientRect(window, &rect)) return TRUE;
+			const LONG w = rect.right - rect.left, h = rect.bottom - rect.top;
+			if (w * h > f.area) { f.area = w * h; f.width = w; f.height = h; }
+			return TRUE;
+		}, reinterpret_cast<LPARAM>(&finder));
+		width = finder.width;
+		height = finder.height;
+		return finder.area > 0;
+#else
+		width = height = 0;
+		return false;
+#endif
+	}
+
 	json TakeSnapshot(const json& arguments, bool& isError)
 	{
 		const std::string folder = DataFolder("SC4MCP_screenshots");
@@ -956,30 +1012,41 @@ namespace
 		std::error_code ignored;
 		std::filesystem::remove(file, ignored);
 
-		std::string line = "TakeSnapshot " + Quote(file.generic_string());
-		if (arguments.contains("crop"))
+		// TakeSnapshot <file> <x> <y> <width> <height> (handler at 0x005C8F2A, capture at 0x005F9560): the four numbers
+		// are x, y, width and height, not two corners, and the command does nothing when width or height is 0, so the
+		// size of the game window is always passed. The image is captured and written within the command; the format
+		// comes from the file extension (Gimex codec chosen by name).
+		json result = OnGameThread([&]() -> json
 		{
-			const json& crop = arguments["crop"];
-			line += " " + std::to_string(crop.at("x1").get<int32_t>()) + " " + std::to_string(crop.at("y1").get<int32_t>()) + " "
-				+ std::to_string(crop.at("x2").get<int32_t>()) + " " + std::to_string(crop.at("y2").get<int32_t>());
-		}
-		json result = OnGameThread([&] { return Execute(line); }, isError);
+			int32_t x = 0, y = 0, width = 0, height = 0;
+			if (arguments.contains("crop"))
+			{
+				const json& crop = arguments["crop"];
+				x = crop.value("x", 0);
+				y = crop.value("y", 0);
+				width = crop.value("width", 0);
+				height = crop.value("height", 0);
+			}
+			if (width <= 0 || height <= 0)
+			{
+				int32_t windowWidth = 0, windowHeight = 0;
+				if (!GameWindowSize(windowWidth, windowHeight)) return Error("Could not find the size of the game window; pass crop = {x, y, width, height}.");
+				if (width <= 0) width = windowWidth - x;
+				if (height <= 0) height = windowHeight - y;
+			}
+			if (x < 0 || y < 0 || width <= 0 || height <= 0) return Error("crop must have x, y >= 0 and a positive width and height.");
+			json r = Execute("TakeSnapshot " + Quote(file.generic_string()) + " " + std::to_string(x) + " " + std::to_string(y) + " " + std::to_string(width) + " " + std::to_string(height));
+			r["rect"] = json{ {"x", x}, {"y", y}, {"width", width}, {"height", height} };
+			return r;
+		}, isError);
 		if (isError) return result;
 
-		// The game may write the file on a later frame: wait up to 5 seconds for it to appear and stop growing.
-		uintmax_t size = 0;
-		for (int attempt = 0; attempt < 50; ++attempt)
-		{
-			std::this_thread::sleep_for(std::chrono::milliseconds(100));
-			std::error_code error;
-			const uintmax_t current = std::filesystem::exists(file, error) ? std::filesystem::file_size(file, error) : 0;
-			if (current > 0 && current == size) break;
-			size = current;
-		}
+		std::error_code error;
+		const uintmax_t size = std::filesystem::exists(file, error) ? std::filesystem::file_size(file, error) : 0;
 		json out{ {"file", file.string()}, {"bytes", size}, {"command", result} };
 		if (size == 0)
 		{
-			out["note"] = "The game did not write the file within 5 seconds (it may be minimized, or need the city view).";
+			out["note"] = "The game did not write the file (status " + std::to_string(result.value("return_code", -1)) + "): the window may be minimized or the rectangle outside it.";
 			return out;
 		}
 		std::ifstream in(file, std::ios::binary);
@@ -1018,7 +1085,7 @@ namespace
 		if (arguments.contains("zoom"))
 		{
 			const int32_t zoom = arguments["zoom"].get<int32_t>();
-			if (zoom < 0 || zoom > 5) return Error("zoom must be 0-5 (the game's Zoom0 to Zoom5 commands).");
+			if (zoom < 0 || zoom > 5) return Error("zoom must be 0 (farthest) to 5 (closest), the game's Zoom0 to Zoom5 commands.");
 			json r = Execute("Zoom" + std::to_string(zoom));
 			if (r.contains("error")) return r;
 			done.push_back(r["command"]);
@@ -1144,14 +1211,14 @@ namespace ToolsCommon
 			GameThread([](const json& arguments) { return GetTerrain(arguments); }) });
 
 		tools.push_back({ "set_camera",
-			"Moves the game camera and changes the view, without changing the city: x and z centre the view on a cell, zoom 0-5 (the game's Zoom0-Zoom5), rotate -3..3 quarter turns (positive clockwise), lighting day/night/cycle, and grid, signs_and_labels, terrain_contours, ui = true to toggle those overlays. Returns the camera position. Useful before take_snapshot.",
+			"Moves the game camera and changes the view, without changing the city: x and z centre the view on a cell, zoom 0 (farthest) to 5 (closest), rotate -3..3 quarter turns (positive clockwise), lighting day/night/cycle, and grid, signs_and_labels, terrain_contours, ui = true to toggle those overlays. Returns the camera position. Useful before take_snapshot.",
 			Schema({ {"x", {{"type", "integer"}}}, {"z", {{"type", "integer"}}}, {"zoom", {{"type", "integer"}, {"minimum", 0}, {"maximum", 5}}},
 				{"rotate", {{"type", "integer"}, {"minimum", -3}, {"maximum", 3}}}, {"lighting", {{"type", "string"}}},
 				{"grid", {{"type", "boolean"}}}, {"signs_and_labels", {{"type", "boolean"}}}, {"terrain_contours", {{"type", "boolean"}}}, {"ui", {{"type", "boolean"}}} }), Permission::Read,
 			GameThread([](const json& arguments) { return SetCamera(arguments); }) });
 
 		tools.push_back({ "take_snapshot",
-			"Takes a screenshot of the game window (as the game's TakeSnapshot command) into SC4MCP_screenshots next to the DLL and returns it as an image the assistant can look at (PNG or JPEG up to 4 MB). crop = {x1, y1, x2, y2} in window pixels; format png (default), jpg or bmp; return_image=false returns only the file path. set_camera first to frame the view.",
+			"Takes a screenshot of the game window (as the game's TakeSnapshot command) into SC4MCP_screenshots next to the DLL and returns it as an image the assistant can look at (PNG or JPEG up to 4 MB). crop = {x, y, width, height} in window pixels (default the whole window); format png (default), jpg or bmp; return_image=false returns only the file path. set_camera first to frame the view.",
 			Schema({ {"format", {{"type", "string"}}}, {"crop", {{"type", "object"}}}, {"return_image", {{"type", "boolean"}}} }), Permission::Read,
 			[](const json& arguments, bool& isError, const Tools::Context&) { return TakeSnapshot(arguments, isError); } });
 
@@ -1174,9 +1241,9 @@ namespace ToolsCommon
 			PlanTool(PlanDemolish) });
 
 		tools.push_back({ "place_flora",
-			"Places a flora item (tree, shrub) by its exemplar ID at the centre of a cell (PlaceFlora). Asks for confirmation; dry_run=true only previews.",
+			"Places a flora item (tree, shrub) by its exemplar ID at the centre of a cell, on the terrain, through the flora simulator (the game's PlaceFlora command is broken in 1.1.641). Asks for confirmation; dry_run=true only previews.",
 			Schema(WithConfirm({ {"flora", {{"type", "string"}}}, {"x", {{"type", "integer"}}}, {"z", {{"type", "integer"}}} }), json::array({ "flora", "x", "z" })), Permission::Build,
-			PlanTool(PlanFlora) });
+			Guarded(PlanFlora, ApplyFlora, [](const json& p) { return Describe(p) + "?"; }) });
 
 		tools.push_back({ "set_terrain",
 			"Changes the terrain: altitude (metres) of a cell or a rectangle of up to 64 x 64 cells (SetCellAltitude), or sea_level (SetSeaLevel). Previews the current altitude and the lots in the rectangle; lots are refused unless allow_demolition=true, because changing the terrain under them can destroy them. Asks for confirmation; dry_run=true only previews. Cannot be undone.",

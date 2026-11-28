@@ -159,12 +159,12 @@ commands directly through the game's command server: no command line argument an
 | `query_game_command` | `command` | Runs a read or view command (`GetCellAltitude 10 20`, `GetDirectory UserPlugin`, `Zoom3`...) and returns its output and parsed values. | - |
 | `get_game_info` | - | View (region or city), real date and time, frame rate, memory, the game folders, camera and, in a city, name, mayor, size, sea level and simulation date. Works in the region view. | - |
 | `get_terrain` | `x1`, `z1`, `x2`, `z2`, `step` | Altitude of a cell or rectangle: min, max, average, cells under the sea and the grid (up to 1024 samples). | - |
-| `set_camera` | `x`, `z`, `zoom` (0-5), `rotate` (-3..3), `lighting` (`day`, `night`, `cycle`), `grid`, `signs_and_labels`, `terrain_contours`, `ui` | Moves the camera, zooms, rotates, sets the lighting and toggles overlays; returns the camera position. | - |
-| `take_snapshot` | `format` (`png`, `jpg`, `bmp`), `crop`, `return_image` | Screenshot of the game window to `SC4MCP_screenshots`, returned as an image the assistant can look at. | - |
+| `set_camera` | `x`, `z`, `zoom` (0 farthest - 5 closest), `rotate` (-3..3), `lighting` (`day`, `night`, `cycle`), `grid`, `signs_and_labels`, `terrain_contours`, `ui` | Moves the camera, zooms, rotates, sets the lighting and toggles overlays; returns the camera position. | - |
+| `take_snapshot` | `format` (`png`, `jpg`, `bmp`), `crop` (`{x, y, width, height}`), `return_image` | Screenshot of the game window (or a part) to `SC4MCP_screenshots`, returned as an image the assistant can look at. | - |
 | `place_lot` | `lot`, `x`, `z`, `facing`, `plop_effects` | Places a lot by its lot configuration instance ID; previews name, size and covered cells. | `AllowBuild=1` |
 | `place_network` | `network`, `x1`, `z1`, `x2`, `z2` | Draws a road, rail, highway, street, pipe, power line, avenue, subway, light rail, monorail, one-way road, dirt road or ground highway. | `AllowBuild=1` |
 | `demolish` | `x1`, `z1`, `x2`, `z2`, `effect`, `allow_plopped` | Demolishes a rectangle of up to 64 x 64 cells; plopped buildings only with `allow_plopped=true`. | `AllowBuild=1` |
-| `place_flora` | `flora`, `x`, `z` | Places a tree or shrub at the centre of a cell. | `AllowBuild=1` |
+| `place_flora` | `flora`, `x`, `z` | Places a tree or shrub at the centre of a cell, through the flora simulator (the game's `PlaceFlora` command is broken). | `AllowBuild=1` |
 | `set_terrain` | `x1`, `z1`, `x2`, `z2` + `altitude`, or `sea_level`; `allow_demolition` | Sets the altitude of up to 64 x 64 cells, or the sea level; cells with lots only with `allow_demolition=true`. | `AllowBuild=1` |
 | `set_city_info` | `city_name`, `mayor_name` | Renames the city and the mayor. | `AllowControl=1` |
 | `load_city` | `city`, `size`, `established` | From the region view, opens a city. | `AllowControl=1` |
@@ -186,6 +186,19 @@ Every command has a class, which decides what it needs:
 City commands are registered only while a city is open and region commands only in the region view;
 `list_game_commands` shows what is available now. Changes made by game commands are listed by `list_changes` and
 cannot be undone.
+
+What the game does with a command line, from the 1.1.641 executable (useful with `run_game_command`):
+
+- The line is split on spaces and tabs; a `"quoted string"` stays one parameter, without its quotes, and there are
+  no escape sequences (Windows paths need no doubling of `\`).
+- Numbers can be decimal, negative, floating point or `0x` hexadecimal; Booleans `true`, `false`, `t` or `f`.
+- `return_code` is the command's status: `0` when it succeeded (or set nothing), `2` when it failed. The status is
+  also the last value of the game's output text (`GetAppState` answers `1 0`); SC4MCP reports it as `status` and
+  leaves it out of `values`.
+- `TakeSnapshot <file> <x> <y> <width> <height>`: the numbers are a position and a size, not two corners, and the
+  command does nothing without them. The format comes from the file extension (`.png`, `.jpg`, `.bmp`, `.gif`).
+- `PlaceFlora` is broken: it puts its z argument in the altitude and places the flora at z = -1, off the map.
+- `Zoom0` is the farthest view and `Zoom5` the closest.
 
 ### Test scenarios
 

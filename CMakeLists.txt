@@ -1,7 +1,7 @@
 # SC4MCP.dll - alternative to SC4MCP.sln. Build with Visual Studio 2022, 32-bit (SimCity 4 is a 32-bit game):
 #   cmake -S . -B build -A Win32
 #   cmake --build build --config Release
-cmake_minimum_required(VERSION 3.20)
+cmake_minimum_required(VERSION 3.22)
 project(SC4MCP LANGUAGES CXX)
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 4)
@@ -40,10 +40,13 @@ set(GZCOM_SOURCES
   ${GZCOM}/src/STLPORTCharString.cpp
 )
 add_library(SC4MCP SHARED ${SC4MCP_SOURCES} ${GZCOM_SOURCES})
-target_include_directories(SC4MCP PRIVATE src vendor/nlohmann ${GZCOM}/include)
+target_include_directories(SC4MCP PRIVATE src)
+# Third-party headers (gzcom-dll submodule, nlohmann/json) are external: with MSVC, CMake 3.22+ passes them with
+# /external:I, and /external:W0 silences their warnings, so /W4 reports only SC4MCP's own code.
+target_include_directories(SC4MCP SYSTEM PRIVATE vendor/nlohmann ${GZCOM}/include)
 target_link_libraries(SC4MCP PRIVATE ws2_32 version)
 target_compile_definitions(SC4MCP PRIVATE WIN32 _WINDOWS _USRDLL NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
-target_compile_options(SC4MCP PRIVATE /permissive- /utf-8)
+target_compile_options(SC4MCP PRIVATE /permissive- /utf-8 /external:W0)
 # All warnings for SC4MCP's own code; none for the gzcom-dll submodule, which is not changed here.
 set_source_files_properties(${SC4MCP_SOURCES} PROPERTIES COMPILE_OPTIONS $<$<CXX_COMPILER_ID:MSVC>:/W4>)
 set_source_files_properties(${GZCOM_SOURCES} PROPERTIES COMPILE_OPTIONS $<$<CXX_COMPILER_ID:MSVC>:/W0>)

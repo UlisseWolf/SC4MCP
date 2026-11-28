@@ -68,6 +68,7 @@
     <ClCompile Include="src\TickService.cpp" />
     <ClCompile Include="src\Tools.cpp" />
     <ClCompile Include="src\ToolsCommon.cpp" />
+    <ClCompile Include="src\ToolsCommands.cpp" />
     <ClCompile Include="src\ToolsControl.cpp" />
     <ClCompile Include="src\ToolsDiagnose.cpp" />
     <ClCompile Include="src\ToolsExtra.cpp" />

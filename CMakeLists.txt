@@ -22,6 +22,7 @@ set(SC4MCP_SOURCES
   src/TickService.cpp
   src/Tools.cpp
   src/ToolsCommon.cpp
+  src/ToolsCommands.cpp
   src/ToolsControl.cpp
   src/ToolsDiagnose.cpp
   src/ToolsExtra.cpp

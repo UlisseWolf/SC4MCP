@@ -825,7 +825,8 @@ namespace
 
 		// One confirmation for the whole scenario when it changes the city.
 		static const std::set<std::string> kChanging = { "set_funding", "set_building_funding", "set_tax", "set_ordinance", "take_loan", "undo_last_change",
-			"place_zone", "run_cheat", "save_city" };
+			"place_zone", "run_cheat", "save_city", "run_game_command", "place_lot", "place_network", "demolish", "place_flora", "set_terrain",
+			"set_city_info", "load_city" };
 		std::vector<std::string> changing;
 		for (const json& step : steps)
 		{

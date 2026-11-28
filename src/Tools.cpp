@@ -37,6 +37,7 @@ namespace
 	bool cheatsAllowed = true;
 	bool buildAllowed = true;
 	bool confirmChanges = true;
+	bool dangerousAllowed = false;
 
 	bool Allowed(Permission permission)
 	{
@@ -45,6 +46,7 @@ namespace
 		case Permission::Control: return controlAllowed;
 		case Permission::Cheats: return cheatsAllowed;
 		case Permission::Build: return buildAllowed;
+		case Permission::Dangerous: return dangerousAllowed;
 		default: return true;
 		}
 	}
@@ -60,6 +62,7 @@ namespace
 			AddDiagnosticTools(all);
 			AddExtraTools(all);
 			AddMoreTools(all);
+			AddCommandTools(all);
 			return all;
 		}();
 		return tools;
@@ -454,8 +457,9 @@ namespace ToolsCommon
 
 // ===================================================================================================== Tools API
 
-void Tools::Configure(bool allowControl, bool allowCheats, bool allowBuild, bool confirm)
+void Tools::Configure(bool allowControl, bool allowCheats, bool allowBuild, bool confirm, bool allowDangerous)
 {
+	dangerousAllowed = allowDangerous;
 	controlAllowed = allowControl;
 	cheatsAllowed = allowCheats;
 	buildAllowed = allowBuild;
@@ -465,6 +469,8 @@ void Tools::Configure(bool allowControl, bool allowCheats, bool allowBuild, bool
 namespace ToolsCommon
 {
 	bool ConfirmChangesEnabled() { return confirmChanges; }
+
+	bool PermissionAllowed(Permission permission) { return Allowed(permission); }
 
 	json CallTool(const std::string& name, const json& arguments, bool& isError)
 	{
@@ -514,7 +520,7 @@ json Tools::List()
 		json entry{ {"name", tool.name}, {"description", tool.description}, {"inputSchema", tool.inputSchema},
 			{"outputSchema", json{ {"type", "object"}, {"description", "The result as a JSON object; on failure it has an \"error\" string."} }} };
 		const bool readOnly = tool.permission == Permission::Read;
-		entry["annotations"] = json{ {"readOnlyHint", readOnly}, {"destructiveHint", tool.permission == Permission::Build || tool.permission == Permission::Cheats},
+		entry["annotations"] = json{ {"readOnlyHint", readOnly}, {"destructiveHint", tool.permission == Permission::Build || tool.permission == Permission::Cheats || tool.name == "run_game_command"},
 			{"idempotentHint", readOnly}, {"openWorldHint", false} };
 		list.push_back(entry);
 	}

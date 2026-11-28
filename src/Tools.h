@@ -40,6 +40,7 @@ namespace Tools
 	json GetPrompt(const std::string& name, const json& arguments);
 
 	// Settings read from SC4MCP.ini at startup. confirmChanges: tools that change the city ask for a confirmation
-	// (elicitation, or confirm=true) before applying.
-	void Configure(bool allowControl, bool allowCheats, bool allowBuild, bool confirmChanges);
+	// (elicitation, or confirm=true) before applying. allowDangerous: run_game_command may run the dangerous game
+	// commands (QuitGame, ExecuteScript, TakeSnapshot to any path...).
+	void Configure(bool allowControl, bool allowCheats, bool allowBuild, bool confirmChanges, bool allowDangerous = false);
 }

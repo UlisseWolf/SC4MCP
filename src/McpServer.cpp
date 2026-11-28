@@ -92,7 +92,10 @@ namespace
 		"Use wait_months to let time pass, then compare get_budget, get_services and get_utilities before and after; "
 		"get_history and list_graphs give the monthly history the Graphs window plots. Cells are (x, z) city cells, as "
 		"list_buildings and query_cell report them. Tools that change the city (funding, taxes, ordinances, zoning, "
-		"saving) should only be used when the user asks. "
+		"saving, building, terrain, game commands) should only be used when the user asks. "
+		"The game's own commands are available too: list_game_commands lists them, query_game_command runs the read and "
+		"view ones, and dedicated tools place lots and networks, demolish, shape the terrain, move the camera and take "
+		"screenshots. get_game_info and load_city also work in the region view. "
 		"The game must be running with a city open; while a dialog is open the tools time out.";
 
 	json Error(const json& id, int code, const std::string& message)

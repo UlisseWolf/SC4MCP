@@ -26,6 +26,7 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - [Requirements](#requirements)
 - [Installation](#installation)
 - [Connecting an MCP client](#connecting-an-mcp-client) (Claude, Cursor, VS Code, Windsurf, Gemini CLI, Codex, LM Studio)
+- [Game commands](#game-commands)
 - [Configuration](#configuration)
 - [Example session](#example-session)
 - [How it works](#how-it-works)
@@ -48,6 +49,10 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - **Drive the simulation.** Pause, change the speed, run for N game months with live progress, save the city, run
   cheat codes (including the cheats registered by other DLL plugins).
 - **Manage the city.** Department and building funding, tax rates, ordinances and zoning.
+- **Game commands.** Runs the game's own command system (the commands of Lua test scripts and of the
+  `-NetCommandGenerator` socket): place lots and networks, demolish, shape the terrain, move the camera, take
+  screenshots, read altitudes and game folders, and any command registered by another DLL plugin, each class behind
+  its own `SC4MCP.ini` permission.
 - **Plan the city.** Where to build the next school, hospital, fire or police station, what a tax change would
   earn before making it, the cities of the region, CSV exports for spreadsheets.
 - **Help modders.** Read any exemplar with its inherited cohort properties, audit the cost and capacity of civic
@@ -59,7 +64,8 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - **Standard MCP.** Streamable HTTP transport (protocol versions `2025-06-18`, `2025-03-26`, `2024-11-05`) with
   tools, resources, prompts and progress notifications.
 
-SC4MCP does not place buildings or networks (roads, rails, pipes, power lines): those stay with the player.
+Building (lots, networks, demolition, terrain) goes through the game's own commands and is off with `AllowBuild=0`;
+every such change asks for a confirmation first.
 
 ## Tools
 
@@ -140,6 +146,46 @@ The tools that change the city (`set_funding`, `set_building_funding`, `set_tax`
 `undo_last_change`, `place_zone`, `run_cheat`) accept `dry_run=true` (only describe the change) and, with `ConfirmChanges=1` (default), ask before
 applying: a client that supports MCP elicitation shows the user a confirmation; with other clients the tool returns a
 preview with `confirmation_required` and applies the change only when called again with `confirm=true`.
+
+### Game commands
+
+SimCity 4 has a command system for Lua test scripts, the `-NetCommandGenerator` socket and the cheat box, documented in
+[sc4-game-command-documentation](https://github.com/0xC0000054/sc4-game-command-documentation). SC4MCP runs these
+commands directly through the game's command server: no command line argument and no socket are needed.
+
+| Tool | Parameters | Description | Requires |
+|---|---|---|---|
+| `list_game_commands` | `contains`, `class`, `include_unregistered` (bool) | The commands registered now, including those of other DLL plugins, with parameter info, class, summary and whether the settings allow them. | - |
+| `query_game_command` | `command` | Runs a read or view command (`GetCellAltitude 10 20`, `GetDirectory UserPlugin`, `Zoom3`...) and returns its output and parsed values. | - |
+| `get_game_info` | - | View (region or city), real date and time, frame rate, memory, the game folders, camera and, in a city, name, mayor, size, sea level and simulation date. Works in the region view. | - |
+| `get_terrain` | `x1`, `z1`, `x2`, `z2`, `step` | Altitude of a cell or rectangle: min, max, average, cells under the sea and the grid (up to 1024 samples). | - |
+| `set_camera` | `x`, `z`, `zoom` (0-5), `rotate` (-3..3), `lighting` (`day`, `night`, `cycle`), `grid`, `signs_and_labels`, `terrain_contours`, `ui` | Moves the camera, zooms, rotates, sets the lighting and toggles overlays; returns the camera position. | - |
+| `take_snapshot` | `format` (`png`, `jpg`, `bmp`), `crop`, `return_image` | Screenshot of the game window to `SC4MCP_screenshots`, returned as an image the assistant can look at. | - |
+| `place_lot` | `lot`, `x`, `z`, `facing`, `plop_effects` | Places a lot by its lot configuration instance ID; previews name, size and covered cells. | `AllowBuild=1` |
+| `place_network` | `network`, `x1`, `z1`, `x2`, `z2` | Draws a road, rail, highway, street, pipe, power line, avenue, subway, light rail, monorail, one-way road, dirt road or ground highway. | `AllowBuild=1` |
+| `demolish` | `x1`, `z1`, `x2`, `z2`, `effect`, `allow_plopped` | Demolishes a rectangle of up to 64 x 64 cells; plopped buildings only with `allow_plopped=true`. | `AllowBuild=1` |
+| `place_flora` | `flora`, `x`, `z` | Places a tree or shrub at the centre of a cell. | `AllowBuild=1` |
+| `set_terrain` | `x1`, `z1`, `x2`, `z2` + `altitude`, or `sea_level`; `allow_demolition` | Sets the altitude of up to 64 x 64 cells, or the sea level; cells with lots only with `allow_demolition=true`. | `AllowBuild=1` |
+| `set_city_info` | `city_name`, `mayor_name` | Renames the city and the mayor. | `AllowControl=1` |
+| `load_city` | `city`, `size`, `established` | From the region view, opens a city. | `AllowControl=1` |
+| `run_game_command` | `command` | Runs any command line, after its class is checked (see below). | `AllowControl=1` |
+
+Every command has a class, which decides what it needs:
+
+| Class | Examples | Needs |
+|---|---|---|
+| `read` | `GetAppState`, `GetCellAltitude`, `GetSimulationDate`, `GetDirectory`, `GetMemInfo` | nothing |
+| `view` | `SetViewTarget`, `Zoom0`-`Zoom5`, `RotateCW`, `ToggleGridVisibility`, the `...Tool` selectors | nothing |
+| `control` | `SimSpeedFast`, `GamePause`, `SaveCity`, `SetCityName`, `LoadCity` | `AllowControl=1` and a confirmation |
+| `modal` | `GZWinMessageBox`, `Open...Dialog` (the game waits for the player) | `AllowControl=1` and a confirmation |
+| `build` | `PlaceLot`, `PlaceNetwork`, `PlaceZone`, `Demolish`, `SetCellAltitude`, `SetSeaLevel`, `ToxicSpill` | `AllowBuild=1` and a confirmation |
+| `unknown` | commands registered by other DLL plugins | `AllowCheats=1` and a confirmation |
+| `dangerous` | `QuitGame`, `QuitCity`, `ExecuteScript`, `ViewWebBrowser`, `TakeSnapshot` at any path, `GZWin...` window commands | `AllowDangerousCommands=1` and a confirmation |
+| `forbidden` | `CreateException` | never run |
+
+City commands are registered only while a city is open and region commands only in the region view;
+`list_game_commands` shows what is available now. Changes made by game commands are listed by `list_changes` and
+cannot be undone.
 
 ### Test scenarios
 
@@ -404,10 +450,11 @@ timeout on progress then never cut the call. Other clients may stop waiting earl
 |---|---|---|
 | `Enabled` | `1` | `0` turns the plugin off. |
 | `Port` | `8765` | TCP port on `127.0.0.1`. Change it if another program uses 8765. |
-| `AllowControl` | `1` | `0` removes `set_speed`, `wait_months`, `save_city`, `set_funding`, `set_building_funding`, `set_tax` and `set_ordinance`. |
-| `AllowCheats` | `1` | `0` removes `run_cheat`. |
-| `AllowBuild` | `1` | `0` removes `place_zone`. |
-| `ReadOnly` | `0` | `1` turns off `AllowControl`, `AllowCheats` and `AllowBuild` at once. |
+| `AllowControl` | `1` | `0` removes `set_speed`, `wait_months`, `save_city`, `set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `set_city_info`, `load_city` and `run_game_command`. |
+| `AllowCheats` | `1` | `0` removes `run_cheat` and refuses the commands of other DLL plugins in `run_game_command`. |
+| `AllowBuild` | `1` | `0` removes `place_zone`, `place_lot`, `place_network`, `demolish`, `place_flora` and `set_terrain`, and refuses the build commands of `run_game_command`. |
+| `AllowDangerousCommands` | `0` | `1` lets `run_game_command` run the dangerous game commands (quit, scripts, browser, files at any path, window commands). `CreateException` is never run. |
+| `ReadOnly` | `0` | `1` turns off `AllowControl`, `AllowCheats`, `AllowBuild` and `AllowDangerousCommands` at once. |
 | `ConfirmChanges` | `1` | Tools that change the city ask for a confirmation (see [Tools](#tools)); `0` applies at once. |
 | `AuthToken` | (empty) | When set, every request to `/mcp` needs `Authorization: Bearer <AuthToken>`. `auto` generates a random token at the next start and writes it to the file. |
 
@@ -479,6 +526,7 @@ A typical balance test, as an assistant would run it:
 | `src/ToolsDiagnose.cpp` | Growth diagnostics, building properties and snapshots. |
 | `src/ToolsExtra.cpp` | Transport, loans, neighbour deals, map images, change history and undo. |
 | `src/ToolsMore.cpp` | Service locations, CSV export, region, building audit, resources, plugins and overrides, cheats, scenarios. |
+| `src/ToolsCommands.cpp` | Game commands through the game's command server: classes and permissions, the generic tools and the curated build, terrain, camera and snapshot tools. |
 | `src/ToolsCommon.cpp` | Helpers shared by the tool modules (game thread, buildings, advisor data). |
 | `src/McpLog.cpp` | `SC4MCP.log`. |
 
@@ -491,10 +539,12 @@ A typical balance test, as an assistant would run it:
 - By default there is no authentication: any program running on the same PC can call the server while the game is
   open. Set `AuthToken` to require a bearer token, set `AllowControl=0`, `AllowCheats=0` and `AllowBuild=0` for a
   read-only server, or `Enabled=0` when you do not need it.
-- Every change to the city (speed, funding, taxes, ordinances, zoning, saving, cheats) and every confirmation is
-  written to `SC4MCP.log`.
+- Every change to the city (speed, funding, taxes, ordinances, zoning, saving, cheats, game commands) and every
+  confirmation is written to `SC4MCP.log`.
+- Game commands are classified before they run; the dangerous ones (quitting, running scripts, writing files at any
+  path, window commands that can block input) need `AllowDangerousCommands=1`, and `CreateException` is never run.
 - `read_log` reads only `.log` files in the Plugins folder. The plugin tools only read the Plugins folder; files are
-  written only to `SC4MCP_snapshots` and `SC4MCP_exports` next to the DLL.
+  written only to `SC4MCP_snapshots`, `SC4MCP_exports` and `SC4MCP_screenshots` next to the DLL.
 
 ## Building from source
 
@@ -604,6 +654,8 @@ Every version and its changes are listed in [Changelog.md](Changelog.md).
 
 - [gzcom-dll](https://github.com/SC4SDK/gzcom-dll) by the SC4SDK contributors, from the original SDK by
   [nsgomez](https://github.com/nsgomez/gzcom-dll): the interfaces of the game that SC4MCP calls.
+- [sc4-game-command-documentation](https://github.com/0xC0000054/sc4-game-command-documentation) by 0xC0000054: the
+  game commands, their parameters and the command server interfaces.
 - [dbpf-mcp](https://github.com/caspervg/dbpf-mcp) by caspervg: the reference for reading DBPF files, used for
   `find_plugin_conflicts` and `find_resource_file`.
 - [nlohmann/json](https://github.com/nlohmann/json) by Niels Lohmann: JSON for the MCP protocol.

@@ -3,6 +3,22 @@
 All notable changes to SC4MCP are listed here, newest first. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## 1.5.0 (unreleased)
+
+- Game commands: SC4MCP runs the game's own command system (the commands of Lua test scripts and of the
+  `-NetCommandGenerator` socket, documented in
+  [sc4-game-command-documentation](https://github.com/0xC0000054/sc4-game-command-documentation)) through the
+  game's command server, without the socket.
+- Generic tools: `list_game_commands` (also the commands of other DLL plugins), `query_game_command` (read and view
+  commands) and `run_game_command` (any command, checked by class and confirmed).
+- Information: `get_game_info` (works in the region view) and `get_terrain`.
+- View: `set_camera` and `take_snapshot` (screenshots returned as images).
+- Building, behind `AllowBuild` and a confirmation: `place_lot`, `place_network`, `demolish`, `place_flora`,
+  `set_terrain`. Also `set_city_info` and `load_city` (from the region view).
+- New setting `AllowDangerousCommands` (default `0`) for quitting, scripts, browser, files at any path and window
+  commands; `CreateException` is never run. `ReadOnly=1` turns it off too.
+- `run_scenario` confirms the new tools that change the city once, like the others.
+
 ## 1.4.0
 
 - License: SC4MCP is now released under the GNU Lesser General Public License, version 2.1 (it was MIT).

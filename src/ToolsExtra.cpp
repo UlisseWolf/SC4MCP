@@ -134,6 +134,8 @@ namespace
 
 namespace ToolsCommon
 {
+	std::string Base64Encode(const std::vector<uint8_t>& data) { return Base64(data); }
+
 	std::string EncodePngBase64(int width, int height, const std::vector<uint8_t>& pixels, const std::vector<uint32_t>& palette)
 	{
 		std::vector<uint8_t> png = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };

@@ -29,6 +29,8 @@
     <TargetName>SC4MCP</TargetName>
     <OutDir>$(SolutionDir)bin\$(Configuration)\</OutDir>
     <IntDir>$(SolutionDir)obj\$(Configuration)\</IntDir>
+    <!-- Third-party headers (gzcom-dll submodule, nlohmann/json) are external: their warnings are not reported. -->
+    <ExternalIncludePath>$(ProjectDir)vendor\nlohmann;$(ProjectDir)vendor\gzcom-dll\gzcom-dll\include;$(ExternalIncludePath)</ExternalIncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup>
     <ClCompile>
@@ -36,7 +38,8 @@
       <SDLCheck>true</SDLCheck>
       <ConformanceMode>true</ConformanceMode>
       <LanguageStandard>stdcpp20</LanguageStandard>
-      <AdditionalIncludeDirectories>src;vendor\nlohmann;vendor\gzcom-dll\gzcom-dll\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>src;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <ExternalWarningLevel>TurnOffAllWarnings</ExternalWarningLevel>
       <AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
     </ClCompile>
@@ -68,12 +71,14 @@
     <ClCompile Include="src\TickService.cpp" />
     <ClCompile Include="src\Tools.cpp" />
     <ClCompile Include="src\ToolsCommon.cpp" />
+    <ClCompile Include="src\ToolsCommands.cpp" />
     <ClCompile Include="src\ToolsControl.cpp" />
     <ClCompile Include="src\ToolsDiagnose.cpp" />
     <ClCompile Include="src\ToolsExtra.cpp" />
     <ClCompile Include="src\ToolsMore.cpp" />
     <ClCompile Include="src\Events.cpp" />
     <ClCompile Include="src\ToolsRead.cpp" />
+    <ClCompile Include="src\ToolsRegion.cpp" />
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZBaseString.cpp">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
@@ -81,6 +86,12 @@
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZCellMap.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\SC4String.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\STLPORTCharString.cpp">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\StringResourceManager.cpp">

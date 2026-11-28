@@ -3,6 +3,28 @@
 All notable changes to SC4MCP are listed here, newest first. Versions follow
 [Semantic Versioning](https://semver.org).
 
+## 1.5.0 (unreleased)
+
+- Game commands: SC4MCP runs the game's own command system (the commands of Lua test scripts and of the
+  `-NetCommandGenerator` socket, documented in
+  [sc4-game-command-documentation](https://github.com/0xC0000054/sc4-game-command-documentation)) through the
+  game's command server, without the socket.
+- Generic tools: `list_game_commands` (also the commands of other DLL plugins), `query_game_command` (read and view
+  commands) and `run_game_command` (any command, checked by class and confirmed).
+- Information: `get_game_info` (works in the region view) and `get_terrain`.
+- View: `set_camera` and `take_snapshot` (screenshots returned as images).
+- Building, behind `AllowBuild` and a confirmation: `place_lot`, `place_network`, `demolish`, `place_flora`,
+  `set_terrain`. Also `set_city_info`.
+- Regions: `list_regions`, `list_region_cities` (every tile, established or not), `load_region` (by name or
+  folder), `load_city` (any tile, by name or region position, as a click in the region view) and `exit_to_region`.
+- New setting `AllowDangerousCommands` (default `0`) for quitting, scripts, browser, files at any path and window
+  commands; `CreateException` is never run. `ReadOnly=1` turns it off too.
+- `run_scenario` confirms the new tools that change the city once, like the others.
+- From an analysis of the 1.1.641 executable: `place_flora` uses the flora simulator directly, because the game's
+  `PlaceFlora` command loses the z coordinate; `take_snapshot` passes x, y, width and height (the command does
+  nothing without a size) and takes the size of the game window by default; the command status is reported as
+  `return_code`/`ok` and removed from the parsed values.
+
 ## 1.4.0
 
 - License: SC4MCP is now released under the GNU Lesser General Public License, version 2.1 (it was MIT).

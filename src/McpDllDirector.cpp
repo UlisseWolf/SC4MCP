@@ -28,6 +28,7 @@ namespace
 		bool allowBuild = true;
 		bool readOnly = false;
 		bool confirmChanges = true;
+		bool allowDangerous = false;
 		bool tokenGenerated = false;
 		std::string authToken;
 	};
@@ -54,7 +55,8 @@ namespace
 		settings.allowBuild = GetPrivateProfileIntW(L"SC4MCP", L"AllowBuild", 1, ini.c_str()) != 0;
 		settings.readOnly = GetPrivateProfileIntW(L"SC4MCP", L"ReadOnly", 0, ini.c_str()) != 0;
 		settings.confirmChanges = GetPrivateProfileIntW(L"SC4MCP", L"ConfirmChanges", 1, ini.c_str()) != 0;
-		if (settings.readOnly) settings.allowControl = settings.allowCheats = settings.allowBuild = false;
+		settings.allowDangerous = GetPrivateProfileIntW(L"SC4MCP", L"AllowDangerousCommands", 0, ini.c_str()) != 0;
+		if (settings.readOnly) settings.allowControl = settings.allowCheats = settings.allowBuild = settings.allowDangerous = false;
 		char token[256]{};
 		GetPrivateProfileStringA("SC4MCP", "AuthToken", "", token, sizeof(token), (McpLog::DllFolder() / L"SC4MCP.ini").string().c_str());
 		settings.authToken = token;
@@ -97,7 +99,7 @@ public:
 			McpLog::Write("Disabled in SC4MCP.ini (Enabled=0).");
 			return true;
 		}
-		Tools::Configure(settings.allowControl, settings.allowCheats, settings.allowBuild, settings.confirmChanges);
+		Tools::Configure(settings.allowControl, settings.allowCheats, settings.allowBuild, settings.confirmChanges, settings.allowDangerous);
 		McpServer::Configure(settings.authToken, settings.port);
 		if (!tick.Register(framework))
 		{

@@ -24,7 +24,10 @@ namespace ToolsCommon
 	using json = nlohmann::json;
 
 	// What a tool may do; each level can be turned off in SC4MCP.ini.
-	enum class Permission { Read, Control, Cheats, Build };
+	enum class Permission { Read, Control, Cheats, Build, Dangerous };
+
+	// Whether SC4MCP.ini allows a permission level (Dangerous: AllowDangerousCommands, for game commands only).
+	bool PermissionAllowed(Permission permission);
 
 	using Handler = std::function<json(const json& arguments, bool& isError, const Tools::Context& context)>;
 
@@ -44,11 +47,14 @@ namespace ToolsCommon
 	void AddDiagnosticTools(std::vector<ToolDef>& tools);
 	void AddExtraTools(std::vector<ToolDef>& tools);
 	void AddMoreTools(std::vector<ToolDef>& tools);
+	void AddCommandTools(std::vector<ToolDef>& tools);
+	void AddRegionTools(std::vector<ToolDef>& tools);
 
 	// Changes made by the tools, newest last, with the calls that undo them (undo_last_change).
 	void RecordChange(const std::string& description, json undoCalls);
 
 	// A PNG image (8-bit palette, uncompressed deflate) as base64. pixels: width x height palette indexes.
+	std::string Base64Encode(const std::vector<uint8_t>& data);
 	std::string EncodePngBase64(int width, int height, const std::vector<uint8_t>& pixels, const std::vector<uint32_t>& paletteRgb);
 
 	// Whether tools that change the city ask for a confirmation first (SC4MCP.ini ConfirmChanges).

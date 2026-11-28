@@ -95,7 +95,8 @@ namespace
 		"saving, building, terrain, game commands) should only be used when the user asks. "
 		"The game's own commands are available too: list_game_commands lists them, query_game_command runs the read and "
 		"view ones, and dedicated tools place lots and networks, demolish, shape the terrain, move the camera and take "
-		"screenshots. get_game_info and load_city also work in the region view. "
+		"screenshots. Regions: list_regions, load_region, list_region_cities, load_city (any tile, by name or position) and "
+		"exit_to_region; they and get_game_info also work in the region view. "
 		"The game must be running with a city open; while a dialog is open the tools time out.";
 
 	json Error(const json& id, int code, const std::string& message)

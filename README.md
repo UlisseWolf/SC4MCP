@@ -27,6 +27,7 @@ formulas. SC4MCP does not depend on SC4SIM and works with any plugin set.
 - [Installation](#installation)
 - [Connecting an MCP client](#connecting-an-mcp-client) (Claude, Cursor, VS Code, Windsurf, Gemini CLI, Codex, LM Studio)
 - [Game commands](#game-commands)
+- [Regions and cities](#regions-and-cities)
 - [Configuration](#configuration)
 - [Example session](#example-session)
 - [How it works](#how-it-works)
@@ -167,7 +168,6 @@ commands directly through the game's command server: no command line argument an
 | `place_flora` | `flora`, `x`, `z` | Places a tree or shrub at the centre of a cell, through the flora simulator (the game's `PlaceFlora` command is broken). | `AllowBuild=1` |
 | `set_terrain` | `x1`, `z1`, `x2`, `z2` + `altitude`, or `sea_level`; `allow_demolition` | Sets the altitude of up to 64 x 64 cells, or the sea level; cells with lots only with `allow_demolition=true`. | `AllowBuild=1` |
 | `set_city_info` | `city_name`, `mayor_name` | Renames the city and the mayor. | `AllowControl=1` |
-| `load_city` | `city`, `size`, `established` | From the region view, opens a city. | `AllowControl=1` |
 | `run_game_command` | `command` | Runs any command line, after its class is checked (see below). | `AllowControl=1` |
 
 Every command has a class, which decides what it needs:
@@ -199,6 +199,22 @@ What the game does with a command line, from the 1.1.641 executable (useful with
   command does nothing without them. The format comes from the file extension (`.png`, `.jpg`, `.bmp`, `.gif`).
 - `PlaceFlora` is broken: it puts its z argument in the altitude and places the flora at z = -1, off the map.
 - `Zoom0` is the farthest view and `Zoom5` the closest.
+
+### Regions and cities
+
+| Tool | Parameters | Description | Requires |
+|---|---|---|---|
+| `list_regions` | - | The regions of the Regions folder: name (from `region.ini`), folder, number of city files, which one is loaded. | - |
+| `list_region_cities` | `established_only` (bool) | Every city tile of the current region, established or not: region position `x`/`z`, size, name, mayor, population, jobs, save file, which one is open. | - |
+| `load_region` | `region` (name or folder) | From the region view, switches region. | `AllowControl=1` |
+| `load_city` | `name`, or `x` + `z` | From the region view, opens a tile as a click does: a saved city opens, an empty tile starts a new city. | `AllowControl=1` |
+| `exit_to_region` | `save` (default true), `show_dialog` | Closes the city (saving it first) and goes back to the region view. | `AllowControl=1` |
+
+The game's own commands are more limited: `LoadRegion` needs the exact, case-sensitive `Name` of `region.ini` (not
+the folder), and `LoadCity` finds a name only among established cities, opening otherwise the first empty tile of a
+size. `load_region` resolves names and folders, and `load_city` opens any tile through the same calls as a click in
+the region view (`cISC4App::LoadCity` or `RequestNewCity`). A typical session: `list_regions`, `load_region`,
+`list_region_cities`, `load_city`, then the city tools; `exit_to_region` to come back.
 
 ### Test scenarios
 
@@ -463,7 +479,7 @@ timeout on progress then never cut the call. Other clients may stop waiting earl
 |---|---|---|
 | `Enabled` | `1` | `0` turns the plugin off. |
 | `Port` | `8765` | TCP port on `127.0.0.1`. Change it if another program uses 8765. |
-| `AllowControl` | `1` | `0` removes `set_speed`, `wait_months`, `save_city`, `set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `set_city_info`, `load_city` and `run_game_command`. |
+| `AllowControl` | `1` | `0` removes `set_speed`, `wait_months`, `save_city`, `set_funding`, `set_building_funding`, `set_tax`, `set_ordinance`, `set_city_info`, `load_region`, `load_city`, `exit_to_region` and `run_game_command`. |
 | `AllowCheats` | `1` | `0` removes `run_cheat` and refuses the commands of other DLL plugins in `run_game_command`. |
 | `AllowBuild` | `1` | `0` removes `place_zone`, `place_lot`, `place_network`, `demolish`, `place_flora` and `set_terrain`, and refuses the build commands of `run_game_command`. |
 | `AllowDangerousCommands` | `0` | `1` lets `run_game_command` run the dangerous game commands (quit, scripts, browser, files at any path, window commands). `CreateException` is never run. |
@@ -540,6 +556,7 @@ A typical balance test, as an assistant would run it:
 | `src/ToolsExtra.cpp` | Transport, loans, neighbour deals, map images, change history and undo. |
 | `src/ToolsMore.cpp` | Service locations, CSV export, region, building audit, resources, plugins and overrides, cheats, scenarios. |
 | `src/ToolsCommands.cpp` | Game commands through the game's command server: classes and permissions, the generic tools and the curated build, terrain, camera and snapshot tools. |
+| `src/ToolsRegion.cpp` | Regions and city tiles: list, switch region, open a tile, back to the region. |
 | `src/ToolsCommon.cpp` | Helpers shared by the tool modules (game thread, buildings, advisor data). |
 | `src/McpLog.cpp` | `SC4MCP.log`. |
 

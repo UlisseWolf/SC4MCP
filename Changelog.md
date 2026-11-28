@@ -14,7 +14,9 @@ All notable changes to SC4MCP are listed here, newest first. Versions follow
 - Information: `get_game_info` (works in the region view) and `get_terrain`.
 - View: `set_camera` and `take_snapshot` (screenshots returned as images).
 - Building, behind `AllowBuild` and a confirmation: `place_lot`, `place_network`, `demolish`, `place_flora`,
-  `set_terrain`. Also `set_city_info` and `load_city` (from the region view).
+  `set_terrain`. Also `set_city_info`.
+- Regions: `list_regions`, `list_region_cities` (every tile, established or not), `load_region` (by name or
+  folder), `load_city` (any tile, by name or region position, as a click in the region view) and `exit_to_region`.
 - New setting `AllowDangerousCommands` (default `0`) for quitting, scripts, browser, files at any path and window
   commands; `CreateException` is never run. `ReadOnly=1` turns it off too.
 - `run_scenario` confirms the new tools that change the city once, like the others.

@@ -75,6 +75,7 @@
     <ClCompile Include="src\ToolsMore.cpp" />
     <ClCompile Include="src\Events.cpp" />
     <ClCompile Include="src\ToolsRead.cpp" />
+    <ClCompile Include="src\ToolsRegion.cpp" />
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZBaseString.cpp">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
@@ -82,6 +83,12 @@
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\cRZCellMap.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\SC4String.cpp">
+      <WarningLevel>TurnOffAllWarnings</WarningLevel>
+    </ClCompile>
+    <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\STLPORTCharString.cpp">
       <WarningLevel>TurnOffAllWarnings</WarningLevel>
     </ClCompile>
     <ClCompile Include="vendor\gzcom-dll\gzcom-dll\src\StringResourceManager.cpp">

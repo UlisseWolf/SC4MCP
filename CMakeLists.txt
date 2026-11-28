@@ -29,12 +29,15 @@ set(SC4MCP_SOURCES
   src/ToolsMore.cpp
   src/Events.cpp
   src/ToolsRead.cpp
+  src/ToolsRegion.cpp
 )
 set(GZCOM_SOURCES
   ${GZCOM}/src/cRZBaseString.cpp
   ${GZCOM}/src/cRZCellMap.cpp
   ${GZCOM}/src/StringResourceManager.cpp
   ${GZCOM}/src/cRZCOMDllDirector.cpp
+  ${GZCOM}/src/SC4String.cpp
+  ${GZCOM}/src/STLPORTCharString.cpp
 )
 add_library(SC4MCP SHARED ${SC4MCP_SOURCES} ${GZCOM_SOURCES})
 target_include_directories(SC4MCP PRIVATE src vendor/nlohmann ${GZCOM}/include)

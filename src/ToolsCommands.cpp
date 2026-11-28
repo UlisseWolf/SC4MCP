@@ -10,6 +10,7 @@
 // Every command is classified before it runs (read, view, control, build, modal, dangerous, forbidden; commands of
 // other DLL plugins are "unknown") and each class needs the matching SC4MCP.ini permission. The curated tools
 // (place_lot, place_network, demolish, set_terrain...) validate their arguments and preview the change first.
+// Regions and city tiles (list_regions, load_region, load_city...) are in ToolsRegion.cpp.
 #include "Tools.h"
 #include "ToolsCommon.h"
 #include "McpLog.h"
@@ -220,8 +221,8 @@ namespace
 			{ "ZoomIn", C::View, "city", "Zooms in." },
 			{ "ZoomOut", C::View, "city", "Zooms out." },
 			// ---- Region
-			{ "LoadCity", C::Control, "region", "Opens a city: LoadCity <name> <small|medium|large|any> <empty|full>." },
-			{ "LoadRegion", C::Control, "region", "Opens a region: LoadRegion <name>." },
+			{ "LoadCity", C::Control, "region", "Opens a city: LoadCity <name> <small|medium|large|any> <empty|full>. The name matches established cities only; load_city opens any tile." },
+			{ "LoadRegion", C::Control, "region", "Opens a region: LoadRegion <name> (the exact, case-sensitive Name of region.ini). load_region also accepts the folder." },
 			{ "RegionBitmapLoad", C::Modal, "region", "Opens a file browser for the region bitmap." },
 		};
 		return commands;
@@ -898,18 +899,6 @@ namespace
 		return plan;
 	}
 
-	json PlanLoadCity(const json& arguments)
-	{
-		const int32_t state = AppState();
-		if (state != 1) return Error(std::string("load_city works in the region view; the game is in the ") + AppStateName(state) + " view.");
-		const std::string name = arguments.value("city", std::string());
-		std::string size = Lower(arguments.value("size", std::string("any")));
-		if (size != "small" && size != "medium" && size != "large" && size != "any") return Error("size must be small, medium, large or any.");
-		const bool established = arguments.value("established", true);
-		return json{ {"action", "load_city"}, {"city", name.empty() ? json("(first city found)") : json(name)}, {"size", size}, {"established", established},
-			{"command", "LoadCity " + Quote(name) + " " + size + (established ? " full" : " empty")} };
-	}
-
 	// ------------------------------------------------------------------------------------------------- apply
 
 	// Runs the command (or commands) of a plan and records the change.
@@ -962,7 +951,6 @@ namespace
 			if (plan.contains("new_mayor_name")) text += std::string(plan.contains("new_city_name") ? " and" : "") + " the mayor to \"" + plan["new_mayor_name"].get<std::string>() + "\"";
 			return text;
 		}
-		if (action == "load_city") return "Open the city " + plan["city"].dump() + " (the region view closes)";
 		return "Run the game command \"" + plan.value("command", std::string()) + "\" (" + plan.value("class", std::string()) + ")";
 	}
 
@@ -1256,9 +1244,5 @@ namespace ToolsCommon
 			Schema(WithConfirm({ {"city_name", {{"type", "string"}}}, {"mayor_name", {{"type", "string"}}} })), Permission::Control,
 			PlanTool(PlanCityInfo) });
 
-		tools.push_back({ "load_city",
-			"From the region view, opens a city of the loaded region (LoadCity): city is its name (empty = the first city found), size small/medium/large/any (default any), established true (default) or false. Asks for confirmation; dry_run=true only previews. The other city tools answer once the city has loaded.",
-			Schema(WithConfirm({ {"city", {{"type", "string"}}}, {"size", {{"type", "string"}}}, {"established", {{"type", "boolean"}}} })), Permission::Control,
-			PlanTool(PlanLoadCity, false) });
 	}
 }

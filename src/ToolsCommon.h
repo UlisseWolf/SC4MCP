@@ -48,6 +48,7 @@ namespace ToolsCommon
 	void AddExtraTools(std::vector<ToolDef>& tools);
 	void AddMoreTools(std::vector<ToolDef>& tools);
 	void AddCommandTools(std::vector<ToolDef>& tools);
+	void AddRegionTools(std::vector<ToolDef>& tools);
 
 	// Changes made by the tools, newest last, with the calls that undo them (undo_last_change).
 	void RecordChange(const std::string& description, json undoCalls);

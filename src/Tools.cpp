@@ -63,6 +63,7 @@ namespace
 			AddExtraTools(all);
 			AddMoreTools(all);
 			AddCommandTools(all);
+			AddRegionTools(all);
 			return all;
 		}();
 		return tools;

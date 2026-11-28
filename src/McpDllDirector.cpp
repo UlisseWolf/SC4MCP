@@ -82,9 +82,9 @@ public:
 	{
 		McpLog::Open();
 		settings = ReadSettings();
-		McpLog::Write("SC4MCP 1.4.0 loaded. Port=%u Enabled=%d ReadOnly=%d AllowControl=%d AllowCheats=%d AllowBuild=%d ConfirmChanges=%d AuthToken=%s",
+		McpLog::Write("SC4MCP 1.5.0 loaded. Port=%u Enabled=%d ReadOnly=%d AllowControl=%d AllowCheats=%d AllowBuild=%d AllowDangerousCommands=%d ConfirmChanges=%d AuthToken=%s",
 			settings.port, settings.enabled, settings.readOnly, settings.allowControl, settings.allowCheats, settings.allowBuild,
-			settings.confirmChanges, settings.authToken.empty() ? "off" : "on");
+			settings.allowDangerous, settings.confirmChanges, settings.authToken.empty() ? "off" : "on");
 		if (settings.tokenGenerated) McpLog::Write("AuthToken=auto: a new token was generated and written to SC4MCP.ini; http://127.0.0.1:%u/setup shows the client configurations with it.", settings.port);
 		framework = pCOM->FrameWork();
 		if (framework->GetState() < cIGZFrameWork::kStatePreAppInit) framework->AddHook(this);

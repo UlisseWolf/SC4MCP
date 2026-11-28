@@ -3,7 +3,7 @@
 All notable changes to SC4MCP are listed here, newest first. Versions follow
 [Semantic Versioning](https://semver.org).
 
-## 1.5.0 (unreleased)
+## 1.5.0
 
 - Game commands: SC4MCP runs the game's own command system (the commands of Lua test scripts and of the
   `-NetCommandGenerator` socket, documented in

@@ -412,7 +412,7 @@ HTTP transport (`url` would mean SSE):
 }
 ```
 
-Run `/mcp` inside Gemini CLI to check that the seven tools are listed.
+Run `/mcp` inside Gemini CLI to check that the SC4MCP tools are listed.
 
 #### Codex CLI and the ChatGPT desktop app
 
@@ -620,7 +620,7 @@ The workflows in `.github/workflows` run only for the `master` branch:
 
 - `build.yml` builds the DLL on every push to `master` and every pull request into `master`, and keeps it as a
   workflow artifact with `SC4MCP.ini`. Work on `staging` is built when it is merged or proposed into `master`.
-- `release.yml` runs for a `vMAJOR.MINOR.PATCH` tag (or `v1.4.0-rc.1` for a prerelease). It refuses tags on commits
+- `release.yml` runs for a `vMAJOR.MINOR.PATCH` tag (or `v1.5.0-rc.1` for a prerelease). It refuses tags on commits
   that are not in `master` and tags that do not match `kServerVersion` in `src/McpServer.cpp`. Then the reusable
   workflow of [sc4-dll-actions](https://github.com/memo33/sc4-dll-actions) builds a zip with the DLL, the INI,
   README, changelog, licenses and `SHA256SUMS.txt`, attests the zip and the DLL, and leaves them in a draft release.
@@ -629,13 +629,13 @@ To release, merge `staging` into `master`, then tag the merge commit and push th
 
 ```sh
 git checkout master && git merge staging && git push origin master
-git tag v1.4.0 && git push origin v1.4.0
+git tag v1.5.0 && git push origin v1.5.0
 ```
 
 Anyone can check a download:
 
 ```sh
-gh attestation verify SC4MCP-v1.4.0-win32.zip --repo UlisseWolf/SC4MCP \
+gh attestation verify SC4MCP-v1.5.0-win32.zip --repo UlisseWolf/SC4MCP \
   --deny-self-hosted-runners --signer-repo memo33/sc4-dll-actions \
   --signer-digest c7aa3d2d748a9bd52a573a79f1f6ba78dde6f25f
 ```
